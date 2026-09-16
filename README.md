@@ -7,7 +7,7 @@ the session, heartbeats while the session runs, and reports the session's output
 own observations as CloudEvents: to files always, to a webhook when one is configured.
 
 This is a Go module, `github.com/qoryai/runner`, imported by the [`qory`](https://github.com/qoryai/qory)
-command, which ships `qory run` and `qory receive` in front of it. It has no command of
+command, which ships `qory run` in front of it. It has no command of
 its own.
 
 ## Layout
@@ -17,13 +17,12 @@ its own.
 | `contracts/runner/v1/` | the contract: the documents, a JSON schema each, the runtime descriptors and the fixtures. [Its README](contracts/runner/v1/README.md) is the specification |
 | `contracts/` | the Go package that embeds the contract and validates every fixture |
 | `session/` | the session runner: `session.Run` takes a launch spec, a policy path and a webhook path and returns the exit status; `session.Forward` is the hook forwarder behind it |
-| `receiver/` | the reference webhook receiver behind `qory receive`: a handler that verifies, deduplicates and stores, and a file store |
+| `receiver/` | the reference receiving side of the webhook: a handler that verifies, deduplicates and stores, and a file store. No command ships it; it is the test of the webhook sink and the model for a receiver |
 | `internal/` | what the layers share: `policy`, `proxy`, `event`, `sink`, `webhook`, `descriptor`, `socket`, `chunk` |
 | `node/` | the node runner, not built yet: it will register, heartbeat, take a dispatched task, hold the run's credentials and start a session through `session` |
 
 `qory run` calls `session.Run` with the spec it builds from the composed home and the
-launch template, and `session.Forward` from the hook command it installs. `qory receive`
-serves a `receiver.Handler` over a `receiver.File`.
+launch template, and `session.Forward` from the hook command it installs.
 
 ## Two invariants
 
