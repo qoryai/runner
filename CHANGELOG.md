@@ -4,15 +4,6 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
-## [0.1.1] - 2026-09-16
-
-### Changed
-
-- The contract says that no declaration and an empty declaration are different: no list
-  leaves the policy's allow list as it is, an empty list under enforce reaches nothing.
-  The code already did this. It also names the policy's `egress.allow` grammar as the one
-  definition of a declared host, which the harness contract copies.
-
 ## [0.1.0] - 2026-09-16
 
 ### Added
@@ -36,4 +27,8 @@ release may change what an existing document does, and says so under Upgrading.
   and counted at exit.
 - The `receiver` package behind `qory receive`: a handler that verifies the signature
   in constant time, deduplicates on event id and appends to a file that remembers its
-  ids across restarts.
+  ids across restarts, and `LoadWebhook`, so one webhook file configures both ends.
+- The contract states that no declaration and an empty declaration differ: no list
+  leaves the policy's allow list as it is, an empty list under enforce reaches nothing.
+  It names the policy's `egress.allow` grammar as the one definition of a declared host,
+  which the harness contract copies.
