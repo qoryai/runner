@@ -17,8 +17,7 @@ its own.
 | `contracts/runner/v1/` | the contract: the documents, a JSON schema each, the runtime descriptors and the fixtures. [Its README](contracts/runner/v1/README.md) is the specification |
 | `contracts/` | the Go package that embeds the contract and validates every fixture |
 | `session/` | the session runner: `session.Run` takes a launch spec, a policy path and a webhook path and returns the exit status; `session.Forward` is the hook forwarder behind it |
-| `receiver/` | the reference receiving side of the webhook: a handler that verifies, deduplicates and stores, and a file store. No command ships it; it is the test of the webhook sink and the model for a receiver |
-| `internal/` | what the layers share: `policy`, `proxy`, `event`, `sink`, `webhook`, `descriptor`, `socket`, `chunk` |
+| `internal/` | what the layers share: `policy`, `proxy`, `event`, `sink`, `webhook`, `descriptor`, `socket`, `chunk`; and `receiver`, the receiving side of the webhook the tests run the sink against, a worked example of the contract's receiving rules |
 | `node/` | the node runner, not built yet: it will register, heartbeat, take a dispatched task, hold the run's credentials and start a session through `session` |
 
 `qory run` calls `session.Run` with the spec it builds from the composed home and the

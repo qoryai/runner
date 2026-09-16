@@ -19,8 +19,8 @@ import (
 
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/policy"
+	"github.com/qoryai/runner/internal/receiver"
 	"github.com/qoryai/runner/internal/socket"
-	"github.com/qoryai/runner/receiver"
 	"github.com/qoryai/runner/session"
 )
 

@@ -267,10 +267,10 @@ the receiver already discards by event id, and the secret is the only credential
 Stripe's signed timestamp and the Standard Webhooks headers were considered and set
 aside for that reason.
 
-**The reference receiver** is the `receiver` package of this module: a handler that
-verifies the signature, deduplicates and appends to a file. No command ships it; it is
-the test of the webhook sink, run against it in this module's tests, and the model for a
-receiver written by anyone else.
+**A worked example** of these rules is `internal/receiver` in this module: a handler
+that verifies the signature, deduplicates and appends to a file, which the module's tests
+run the webhook sink against. It is not a public package and no command ships it; a
+receiver written by anyone else follows this section, and may read that code.
 
 ## The runtime descriptor
 

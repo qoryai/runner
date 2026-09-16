@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/qoryai/runner/internal/event"
+	"github.com/qoryai/runner/internal/receiver"
 	"github.com/qoryai/runner/internal/webhook"
-	"github.com/qoryai/runner/receiver"
 )
 
 // TestReceiverRefusesAndDeduplicates pins the receiver alone: a bad signature is 401,

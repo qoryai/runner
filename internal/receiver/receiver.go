@@ -1,11 +1,11 @@
-// Package receiver is the reference receiving side of the webhook. No command ships it.
+// Package receiver is the receiving side of the webhook that this module's tests run
+// the webhook sink against, and a worked example of the contract's receiving rules.
 //
 // A [Handler] answers deliveries the way the contract asks a receiver to: it verifies
 // the signature over the raw body in constant time before parsing, refuses what does
 // not verify, deduplicates on each event's id, hands every new event to a [Store], and
-// answers 202. It is the test of the webhook sink, which this module's tests run
-// against it, and the model for a receiver written by anyone else. [File] is a store that
-// appends events to one JSON lines file and remembers the ids it holds.
+// answers 202. [File] is a store that appends events to one JSON lines file and
+// remembers the ids it holds.
 package receiver
 
 import (

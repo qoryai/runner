@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/internal/event"
+	"github.com/qoryai/runner/internal/receiver"
 	"github.com/qoryai/runner/internal/sink"
 	"github.com/qoryai/runner/internal/webhook"
-	"github.com/qoryai/runner/receiver"
 )
 
 // TestFileSinkWritesBothRecords pins events.jsonl as one line per event and

@@ -25,9 +25,9 @@ release may change what an existing document does, and says so under Upgrading.
   webhook is configured, and none when it is not; signed batches with a delivery id;
   retries with backoff; 410 as stop; what is not accepted spooled under `undelivered/`
   and counted at exit.
-- The `receiver` package, the reference receiving side: a handler that verifies the signature
-  in constant time, deduplicates on event id and appends to a file that remembers its
-  ids across restarts, and `LoadWebhook`, so one webhook file configures both ends.
+- `internal/receiver`, the receiving side the tests run the webhook sink against: a
+  handler that verifies the signature in constant time, deduplicates on event id and
+  appends to a file that remembers its ids across restarts.
 - The contract states that no declaration and an empty declaration differ: no list
   leaves the policy's allow list as it is, an empty list under enforce reaches nothing.
   It names the policy's `egress.allow` grammar as the one definition of a declared host,
