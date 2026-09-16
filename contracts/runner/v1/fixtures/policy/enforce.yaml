@@ -1,0 +1,9 @@
+# Deny every connection to a host outside the list, and record the denial.
+version: 1
+egress:
+  mode: enforce
+  allow:
+    - api.anthropic.com
+    - "*.github.com"
+    - github.com
+    - registry.npmjs.org

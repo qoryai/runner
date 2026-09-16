@@ -1,0 +1,5 @@
+# A policy narrows only; there is no key that grants.
+version: 1
+egress:
+  mode: observe
+  deny: []

@@ -1,0 +1,10 @@
+# Post only the lifecycle and the egress record; the log stays in the file sink.
+version: 1
+url: https://receiver.example/qory/events
+secret: fixture-secret-not-a-real-one
+events:
+  - ai.qory.run.started
+  - ai.qory.run.heartbeat
+  - ai.qory.run.egress
+  - ai.qory.run.policy_applied
+  - ai.qory.run.exited

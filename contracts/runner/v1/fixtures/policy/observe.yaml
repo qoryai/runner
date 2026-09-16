@@ -1,0 +1,4 @@
+# Observe everything, deny nothing. The same as no policy file at all, written down.
+version: 1
+egress:
+  mode: observe

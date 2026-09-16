@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/events/run.policy_applied.schema.json",
+  "title": "ai.qory.run.policy_applied",
+  "description": "The policy the run is pinned to, as read once before the runtime started, and the effective allow list after the declared egress narrowed it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "allow", "source"],
+  "properties": {
+    "mode": {"type": "string", "enum": ["observe", "enforce"]},
+    "allow": {"description": "The effective allow list: the policy's entries, or when a declaration was given, the declared entries the policy covers.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "source": {"description": "file when a policy file was read; none when there was none and the runner observes everything.", "type": "string", "enum": ["file", "none"]},
+    "path": {"description": "The policy file, when source is file.", "type": "string", "minLength": 1},
+    "digest": {"description": "sha256 of the policy file's bytes, hex, when source is file; the version stamp of the run's policy.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "declared": {"description": "The egress the harness declared, as handed to the runner, when it was.", "type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

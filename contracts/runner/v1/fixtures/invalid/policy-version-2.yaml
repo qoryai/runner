@@ -1,0 +1,4 @@
+# A version this contract does not define. Refused: the runner names the version it reads.
+version: 2
+egress:
+  mode: observe

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/events/session.subagent_finished.schema.json",
+  "title": "ai.qory.session.subagent_finished",
+  "description": "A subagent finished.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "agent_id", "agent_type"],
+  "properties": {
+    "session_id": {"description": "The runtime's own session identifier.", "type": "string", "minLength": 1},
+    "agent_id": {"type": "string", "minLength": 1},
+    "agent_type": {"type": "string", "minLength": 1},
+    "message": {"description": "The subagent's last message, as text.", "type": "string"}
+  }
+}

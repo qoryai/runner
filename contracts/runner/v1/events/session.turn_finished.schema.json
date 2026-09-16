@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/events/session.turn_finished.schema.json",
+  "title": "ai.qory.session.turn_finished",
+  "description": "The runtime finished responding to a prompt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id"],
+  "properties": {
+    "session_id": {"description": "The runtime's own session identifier.", "type": "string", "minLength": 1},
+    "message": {"description": "The last message of the turn, as text.", "type": "string"},
+    "agent_id": {"description": "The subagent this happened in, when it did not happen in the main conversation.", "type": "string", "minLength": 1},
+    "agent_type": {"description": "The subagent's type, or the agent the session was started as.", "type": "string", "minLength": 1}
+  }
+}

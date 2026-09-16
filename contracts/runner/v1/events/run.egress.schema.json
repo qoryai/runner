@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/events/run.egress.schema.json",
+  "title": "ai.qory.run.egress",
+  "description": "One connection the session asked the proxy for, with the decision and the rule that made it. Every connection is one event, allowed or denied.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["host", "port", "method", "decision", "mode", "rule"],
+  "properties": {
+    "host": {"description": "The host the session asked for, as a lower-case name or an IP literal.", "type": "string", "minLength": 1},
+    "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "method": {"description": "CONNECT for a tunnel, HTTP for a plain request through the proxy.", "type": "string", "enum": ["CONNECT", "HTTP"]},
+    "decision": {"type": "string", "enum": ["allowed", "denied"]},
+    "mode": {"description": "The policy mode the decision was made under.", "type": "string", "enum": ["observe", "enforce"]},
+    "rule": {"description": "The allow entry that matched the host, or empty when none did. In observe mode an empty rule is still allowed; in enforce mode it is denied.", "type": "string"}
+  }
+}

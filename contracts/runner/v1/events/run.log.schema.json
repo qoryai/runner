@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/events/run.log.schema.json",
+  "title": "ai.qory.run.log",
+  "description": "One chunk of the session's output: one line or 4096 bytes, whichever comes first. The bytes are the runtime's, uninterpreted; output.log is their concatenation in sequence order.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "stream",
+    "bytes"
+  ],
+  "properties": {
+    "stream": {
+      "description": "terminal on a pseudo-terminal; stdout or stderr on pipes.",
+      "type": "string",
+      "enum": [
+        "terminal",
+        "stdout",
+        "stderr"
+      ]
+    },
+    "bytes": {
+      "description": "The chunk, base64.",
+      "type": "string",
+      "contentEncoding": "base64"
+    }
+  }
+}

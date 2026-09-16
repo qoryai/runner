@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/webhook.schema.json",
+  "title": "Webhook configuration",
+  "description": "Where the runner posts its events besides the file sink: a URL, the secret that signs each delivery, and the event types to send. Lives outside the checkout, beside the policy. Configuring a webhook makes the run fail closed: no run starts unless the receiver answers the ping.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "url", "secret"],
+  "properties": {
+    "version": {
+      "description": "The configuration format. A runner refuses a version it does not read.",
+      "const": 1
+    },
+    "url": {
+      "description": "The receiver's endpoint. https, or http to a loopback address only.",
+      "type": "string",
+      "format": "uri",
+      "pattern": "^(https://[^/?#\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
+    },
+    "secret": {
+      "description": "The key of the HMAC SHA-256 signature on every delivery. Shared with the receiver and with nothing else; it is the credential of this run's reporting.",
+      "type": "string",
+      "minLength": 16
+    },
+    "events": {
+      "description": "The event types to send, by full type name, or * for every type. Absent means every type. The ping is always sent.",
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^(\\*|ai\\.qory\\.[a-z_]+(\\.[a-z_]+)*)$"
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/events/run.started.schema.json",
+  "title": "ai.qory.run.started",
+  "description": "The runtime is about to start. The first event of a run in the file, and the event a receiver creates the run on.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runtime", "command", "args", "dir", "interactive", "runner_version"],
+  "properties": {
+    "runtime": {"description": "The runtime name, as the descriptor names it: claude, codex.", "type": "string", "minLength": 1},
+    "runtime_version": {"description": "The runtime version the descriptor in use was written against; not the version installed, which the runner does not know.", "type": "string", "minLength": 1},
+    "command": {"description": "The program started, as given to the runner.", "type": "string", "minLength": 1},
+    "args": {"description": "Its arguments, as given. Environment is never reported.", "type": "array", "items": {"type": "string"}},
+    "dir": {"description": "The working directory the runtime starts in.", "type": "string", "minLength": 1},
+    "interactive": {"description": "True when the session runs on a pseudo-terminal, false on pipes.", "type": "boolean"},
+    "runner_version": {"type": "string", "minLength": 1},
+    "host": {"description": "The machine's host name.", "type": "string", "minLength": 1}
+  }
+}

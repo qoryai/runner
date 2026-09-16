@@ -1,0 +1,4 @@
+# The mode is observe or enforce; nothing else.
+version: 1
+egress:
+  mode: log

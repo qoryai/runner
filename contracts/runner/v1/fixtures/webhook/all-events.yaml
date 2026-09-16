@@ -1,0 +1,4 @@
+# Post every event to a loopback receiver, such as `qory receive`.
+version: 1
+url: http://127.0.0.1:8787/events
+secret: fixture-secret-not-a-real-one

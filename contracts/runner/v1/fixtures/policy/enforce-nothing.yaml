@@ -1,0 +1,5 @@
+# Enforce with no allow list: the session reaches nothing, and every attempt is recorded.
+version: 1
+egress:
+  mode: enforce
+  allow: []

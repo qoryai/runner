@@ -1,0 +1,142 @@
+# Claude Code. Written against 2.1.273 and its published hooks reference and headless
+# output; the fixtures beside this file are what the rules were checked on.
+#
+# The hooks carry the session in both modes, interactive and not, so they are the
+# canonical source. The standard output, JSON lines when the session runs on pipes, adds
+# only what the hooks do not say: the result line with the outcome, the turns and the cost.
+# Its init line is not mapped, because SessionStart already produced session.started.
+version: 1
+runtime: claude
+runtime_version: "2.1.273"
+sources:
+  output:
+    format: jsonl
+  hooks:
+    install: claude-settings
+    events:
+      - SessionStart
+      - UserPromptSubmit
+      - PreToolUse
+      - PostToolUse
+      - PostToolUseFailure
+      - SubagentStart
+      - SubagentStop
+      - Stop
+      - StopFailure
+      - Notification
+      - SessionEnd
+rules:
+  - source: hooks
+    match: {hook_event_name: SessionStart}
+    type: ai.qory.session.started
+    data:
+      session_id: session_id
+      source: source
+      model: model
+      cwd: cwd
+      agent_type: agent_type
+  - source: hooks
+    match: {hook_event_name: UserPromptSubmit}
+    type: ai.qory.session.prompt_submitted
+    data:
+      session_id: session_id
+      prompt: prompt
+      agent_id: agent_id
+      agent_type: agent_type
+  - source: hooks
+    match: {hook_event_name: PreToolUse}
+    type: ai.qory.session.tool_started
+    data:
+      session_id: session_id
+      tool: tool_name
+      tool_use_id: tool_use_id
+      input: tool_input
+      agent_id: agent_id
+      agent_type: agent_type
+  - source: hooks
+    match: {hook_event_name: PostToolUse}
+    type: ai.qory.session.tool_finished
+    data:
+      session_id: session_id
+      tool: tool_name
+      tool_use_id: tool_use_id
+      input: tool_input
+      response: tool_response
+      duration_ms: duration_ms
+      agent_id: agent_id
+      agent_type: agent_type
+  - source: hooks
+    match: {hook_event_name: PostToolUseFailure}
+    type: ai.qory.session.tool_failed
+    data:
+      session_id: session_id
+      tool: tool_name
+      tool_use_id: tool_use_id
+      input: tool_input
+      error: error
+      interrupted: is_interrupt
+      duration_ms: duration_ms
+      agent_id: agent_id
+      agent_type: agent_type
+  - source: hooks
+    match: {hook_event_name: SubagentStart}
+    type: ai.qory.session.subagent_started
+    data:
+      session_id: session_id
+      agent_id: agent_id
+      agent_type: agent_type
+  - source: hooks
+    match: {hook_event_name: SubagentStop}
+    type: ai.qory.session.subagent_finished
+    data:
+      session_id: session_id
+      agent_id: agent_id
+      agent_type: agent_type
+      message: last_assistant_message
+  - source: hooks
+    match: {hook_event_name: Stop}
+    type: ai.qory.session.turn_finished
+    data:
+      session_id: session_id
+      message: last_assistant_message
+      agent_id: agent_id
+      agent_type: agent_type
+  - source: hooks
+    match: {hook_event_name: StopFailure}
+    type: ai.qory.session.turn_failed
+    data:
+      session_id: session_id
+      error: error
+      details: error_details
+      message: last_assistant_message
+      agent_id: agent_id
+      agent_type: agent_type
+  - source: hooks
+    match: {hook_event_name: Notification}
+    type: ai.qory.session.notification
+    data:
+      session_id: session_id
+      kind: notification_type
+      message: message
+      title: title
+      agent_id: agent_id
+      agent_type: agent_type
+  - source: hooks
+    match: {hook_event_name: SessionEnd}
+    type: ai.qory.session.ended
+    data:
+      session_id: session_id
+      reason: reason
+      agent_id: agent_id
+      agent_type: agent_type
+  - source: output
+    match: {type: result}
+    type: ai.qory.session.result
+    data:
+      session_id: session_id
+      outcome: subtype
+      is_error: is_error
+      turns: num_turns
+      duration_ms: duration_ms
+      cost_usd: total_cost_usd
+      result: result

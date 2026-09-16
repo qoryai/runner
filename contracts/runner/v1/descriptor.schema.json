@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/descriptor.schema.json",
+  "title": "Runtime descriptor",
+  "description": "How the runner attaches to one runtime and turns its records into session events. A descriptor matches and copies; it never computes. runtimes/<name>/descriptor.yaml, with fixtures beside it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "runtime",
+    "runtime_version",
+    "sources",
+    "rules"
+  ],
+  "properties": {
+    "version": {
+      "description": "The descriptor format. A runner refuses a version it does not read.",
+      "const": 1
+    },
+    "runtime": {
+      "description": "The runtime this describes, as the launch spec names it: claude, codex.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "runtime_version": {
+      "description": "The runtime version the rules were written against and the fixtures recorded from. Reported in run.started; not checked against the installed version, which the runner does not know.",
+      "type": "string",
+      "minLength": 1
+    },
+    "sources": {
+      "description": "How the runner attaches. The terminal bytes are always captured and need no source: there is nothing in them to match.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "output": {
+          "description": "Structured output on the runtime's standard output, when the session runs on pipes.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "format"
+          ],
+          "properties": {
+            "format": {
+              "description": "jsonl: one JSON object per line. Lines that are not JSON objects are not records.",
+              "const": "jsonl"
+            }
+          }
+        },
+        "hooks": {
+          "description": "Hook calls the runtime makes. The runner installs its forwarder as a command hook for each listed event in the settings the launch passes; the forwarder writes what it reads on its standard input to the local socket as one record.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "install",
+            "events"
+          ],
+          "properties": {
+            "install": {
+              "description": "How the runner installs its forwarder, chosen among the ways the binary implements. claude-settings: a command hook per event, added to the JSON settings file the launch passes with --settings, or to a new one when it passes none.",
+              "type": "string",
+              "enum": [
+                "claude-settings"
+              ]
+            },
+            "events": {
+              "description": "The runtime's hook event names to install the forwarder for, in the runtime's own spelling.",
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "rules": {
+      "description": "Evaluated in order against every record of the named source; the first rule whose match holds produces one event, and a record no rule matches produces nothing.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source",
+          "match",
+          "type",
+          "data"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "output",
+              "hooks"
+            ]
+          },
+          "match": {
+            "description": "Every entry must hold: a path into the record equals the value, a string, number or boolean; or, with {present: true}, the path exists. Nothing else: no patterns, no ranges, no expressions.",
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+            },
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "present"
+                  ],
+                  "properties": {
+                    "present": {
+                      "const": true
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "type": {
+            "description": "The session event type produced.",
+            "type": "string",
+            "enum": [
+              "ai.qory.session.started",
+              "ai.qory.session.prompt_submitted",
+              "ai.qory.session.tool_started",
+              "ai.qory.session.tool_finished",
+              "ai.qory.session.tool_failed",
+              "ai.qory.session.turn_finished",
+              "ai.qory.session.turn_failed",
+              "ai.qory.session.subagent_started",
+              "ai.qory.session.subagent_finished",
+              "ai.qory.session.notification",
+              "ai.qory.session.ended",
+              "ai.qory.session.result"
+            ]
+          },
+          "data": {
+            "description": "The event's data: each key is a field of the type's data, each value a dotted path into the record whose value is copied there unchanged. A path that does not exist leaves the field out.",
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+            }
+          }
+        }
+      }
+    }
+  }
+}

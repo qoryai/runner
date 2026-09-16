@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/events/run.exited.schema.json",
+  "title": "ai.qory.run.exited",
+  "description": "The runtime exited. The result of the run and its last event.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["state", "exit_code", "duration_ms"],
+  "properties": {
+    "state": {"description": "succeeded on exit status 0, failed otherwise, including a signal.", "type": "string", "enum": ["succeeded", "failed"]},
+    "exit_code": {"description": "The exit status, or -1 when the runtime was killed by a signal.", "type": "integer", "minimum": -1},
+    "signal": {"description": "The signal that killed the runtime, when one did: SIGKILL, SIGTERM.", "type": "string", "minLength": 1},
+    "duration_ms": {"description": "Milliseconds from run.started to exit.", "type": "integer", "minimum": 0}
+  }
+}

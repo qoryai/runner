@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/policy.schema.json",
+  "title": "Run policy",
+  "description": "The document that narrows what one run may do. Read once from a file outside the checkout, or later carried in a run start answer, and pinned for the run. It can only tighten what the runner binary allows; it never grants.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "egress"],
+  "properties": {
+    "version": {
+      "description": "The policy format. A runner refuses a version it does not read.",
+      "const": 1
+    },
+    "egress": {
+      "description": "What the session may reach through the runner's proxy.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "description": "observe records every connection and denies none; enforce denies a connection to a host outside allow and records the denial. Enforce with no allow list reaches nothing.",
+          "type": "string",
+          "enum": ["observe", "enforce"]
+        },
+        "allow": {
+          "description": "Hosts the session may reach: a lower-case host name, or a *. suffix matching every host below it and not the apex itself. No ports, no paths, no schemes. Absent means an empty list.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+          }
+        }
+      }
+    }
+  }
+}

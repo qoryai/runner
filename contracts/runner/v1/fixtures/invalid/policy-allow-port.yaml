@@ -1,0 +1,6 @@
+# A host carries no port, no scheme and no path.
+version: 1
+egress:
+  mode: enforce
+  allow:
+    - api.anthropic.com:443

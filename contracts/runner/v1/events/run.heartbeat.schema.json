@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/events/run.heartbeat.schema.json",
+  "title": "ai.qory.run.heartbeat",
+  "description": "The run is alive. Sent every interval_seconds while the runtime runs; a receiver that misses two in a row may consider the run lost.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["elapsed_seconds", "interval_seconds"],
+  "properties": {
+    "elapsed_seconds": {"description": "Seconds since run.started.", "type": "integer", "minimum": 0},
+    "interval_seconds": {"description": "Seconds between heartbeats, so a receiver knows what to expect.", "type": "integer", "minimum": 1}
+  }
+}

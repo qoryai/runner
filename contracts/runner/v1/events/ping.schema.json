@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/events/ping.schema.json",
+  "title": "ai.qory.ping",
+  "description": "Sent to the webhook before the runtime starts, when a webhook is configured. The receiver answers 2xx or the run does not start.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runner_version", "events"],
+  "properties": {
+    "runner_version": {"description": "The runner module version, as Go stamps it.", "type": "string", "minLength": 1},
+    "events": {"description": "The event types this webhook will receive, as configured.", "type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}
