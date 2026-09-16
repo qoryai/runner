@@ -123,8 +123,12 @@ hands that list to the runner, and the effective allow list is the declared entr
 policy covers: a name is covered by the same name or by a suffix pattern above it, a
 pattern is covered by the same pattern or by a suffix pattern above it. A declared host
 the policy does not cover is dropped, and `ai.qory.run.policy_applied` records both
-lists. With no declaration, the policy's list is the effective list. The policy is the
-ceiling; a declaration can only lower it.
+lists. No declaration and an empty declaration are different things: a harness in which
+no module declares egress hands over no list, and the policy's list is the effective
+list; a harness whose modules declare, and between them name no host, hands over an
+empty list, and `enforce` reaches nothing. The policy is the ceiling; a declaration can
+only lower it. The grammar of a declared host is that of `egress.allow`, defined here
+once; the harness contract copies it and cites this document.
 
 **Matching a connection.** The host of a `CONNECT` request is its authority; the host of
 a plain request is the authority of its absolute-form target, never its `Host` header.
