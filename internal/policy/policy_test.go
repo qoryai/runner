@@ -3,64 +3,69 @@ package policy_test
 import (
 	"errors"
 	"io/fs"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/policy"
 )
 
-// write copies a contract fixture to a temporary file and returns its path.
-func write(t *testing.T, fixture string) string {
+// fixture is the bytes of a contract fixture.
+func fixture(t *testing.T, name string) []byte {
 	t.Helper()
-	b, err := fs.ReadFile(contracts.FS, fixture)
+	b, err := fs.ReadFile(contracts.FS, name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := filepath.Join(t.TempDir(), filepath.Base(fixture))
-	if err := os.WriteFile(p, b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return p
+	return b
 }
 
-// TestAbsentPolicyObservesEverything pins that no path means observe with an empty
-// list, source none.
+// TestAbsentPolicyObservesEverything pins that no document means observe with an
+// empty list, source none.
 func TestAbsentPolicyObservesEverything(t *testing.T) {
-	l, err := policy.Load("")
-	if err != nil {
-		t.Fatal(err)
-	}
+	l := policy.None()
 	if l.Source != "none" || l.Policy.Egress.Mode != policy.Observe || len(l.Policy.Egress.Allow) != 0 {
 		t.Errorf("absent policy loaded as %+v", l)
 	}
 }
 
-// TestFixturesLoadWithDigest pins that every accepted fixture loads, with the file's
-// digest and the mode it states.
-func TestFixturesLoadWithDigest(t *testing.T) {
+// TestFixturesReadWithDigest pins that every accepted fixture reads, with a digest and
+// the mode it states, and that the digest is the document's, not the bytes': the same
+// policy as YAML and as JSON has one digest.
+func TestFixturesReadWithDigest(t *testing.T) {
 	for name, mode := range map[string]policy.Mode{"observe.yaml": policy.Observe, "enforce.yaml": policy.Enforce, "enforce-nothing.yaml": policy.Enforce} {
-		l, err := policy.Load(write(t, "fixtures/policy/"+name))
+		l, err := policy.Read(name, fixture(t, "fixtures/policy/"+name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if l.Source != "file" || len(l.Digest) != 64 || l.Policy.Egress.Mode != mode {
-			t.Errorf("%s: loaded as %+v", name, l)
+		if l.Source != "config" || len(l.Digest) != 64 || l.Policy.Egress.Mode != mode {
+			t.Errorf("%s: read as %+v", name, l)
 		}
+	}
+	yaml, err := policy.Read("enforce.yaml", fixture(t, "fixtures/policy/enforce.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	js, err := policy.Read("policy", []byte(`{"version":1,"egress":{"mode":"enforce","allow":["api.anthropic.com","*.github.com","github.com","registry.npmjs.org"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if yaml.Digest != js.Digest {
+		t.Errorf("digests differ: %s %s", yaml.Digest, js.Digest)
 	}
 }
 
-// TestUnreadableOrInvalidPolicyIsAnError pins the rule that a configured policy that
-// cannot be read means no run: a missing file and a refused document are both a
-// *policy.Error naming the path.
-func TestUnreadableOrInvalidPolicyIsAnError(t *testing.T) {
-	for _, p := range []string{filepath.Join(t.TempDir(), "missing.yaml"), write(t, "fixtures/invalid/policy-mode-log.yaml"), write(t, "fixtures/invalid/policy-allow-widens.yaml")} {
-		_, err := policy.Load(p)
+// TestInvalidPolicyIsAnError pins the rule that a configured policy that does not
+// read means no run: a refused document is a *policy.Error naming the document.
+func TestInvalidPolicyIsAnError(t *testing.T) {
+	for _, name := range []string{"fixtures/invalid/policy-mode-log.yaml", "fixtures/invalid/policy-allow-widens.yaml"} {
+		_, err := policy.Read(name, fixture(t, name))
 		var pe *policy.Error
-		if !errors.As(err, &pe) || pe.Path != p {
-			t.Errorf("%s: %v", p, err)
+		if !errors.As(err, &pe) || pe.Name != name {
+			t.Errorf("%s: %v", name, err)
 		}
+	}
+	if _, err := policy.Read("policy", []byte(`{"version":1,"egress":{"mode":"log"}}`)); err == nil {
+		t.Error("mode log was accepted")
 	}
 }
 

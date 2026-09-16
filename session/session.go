@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,11 +39,12 @@ type Spec struct {
 	Stdin       io.Reader
 	Stdout      io.Writer
 	Stderr      io.Writer
-	// PolicyPath is the policy file; empty means no policy, mode observe.
-	PolicyPath string
-	// WebhookPath is the webhook configuration; empty means none. Local ignores it.
-	WebhookPath string
-	Local       bool
+	// Policy is the run's policy; nil means no policy, mode observe.
+	Policy *Policy
+	// Webhook is where the events are posted as well; nil means files only. Local
+	// ignores it.
+	Webhook *Webhook
+	Local   bool
 	// Declared is the egress the harness declared, nil when nothing was.
 	Declared []string
 	// RunsDir holds the run directories; empty means Dir/.qory/runs.
@@ -93,13 +95,18 @@ const closeWait = 15 * time.Second
 // an error. The context ending stops the runtime.
 func Run(ctx context.Context, spec Spec) (*Result, error) {
 	spec = withDefaults(spec)
-	pol, err := policy.Load(spec.PolicyPath)
-	if err != nil {
-		return nil, err
+	pol := policy.None()
+	var err error
+	if spec.Policy != nil {
+		b, _ := json.Marshal(spec.Policy)
+		if pol, err = policy.Read("policy", b); err != nil {
+			return nil, err
+		}
 	}
 	var hook *webhook.Config
-	if !spec.Local {
-		if hook, err = webhook.Load(spec.WebhookPath); err != nil {
+	if !spec.Local && spec.Webhook != nil {
+		b, _ := json.Marshal(spec.Webhook)
+		if hook, err = webhook.Read("webhook", b); err != nil {
 			return nil, err
 		}
 	}
@@ -183,8 +190,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		"dir": spec.Dir, "interactive": spec.Interactive, "runner_version": spec.RunnerVersion, "host": hostname(),
 	})
 	applied := map[string]any{"mode": string(pol.Policy.Egress.Mode), "allow": allow, "source": pol.Source}
-	if pol.Source == "file" {
-		applied["path"], applied["digest"] = pol.Path, pol.Digest
+	if pol.Source == "config" {
+		applied["digest"] = pol.Digest
 	}
 	if spec.Declared != nil {
 		applied["declared"] = spec.Declared

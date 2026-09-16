@@ -8,19 +8,20 @@ import (
 	"github.com/qoryai/runner/session"
 )
 
-// Example runs one headless Claude Code turn inside the boundary, with the policy and
-// the webhook read from the caller's configuration directory, and exits with the
-// runtime's status. It compiles with the module's tests and is not run, since it
-// starts a real program.
+// Example runs one headless Claude Code turn inside the boundary, with a policy and a
+// webhook the caller read from its own configuration, and exits with the runtime's
+// status. It compiles with the module's tests and is not run, since it starts a real
+// program.
 func Example() {
 	exe, _ := os.Executable()
 	res, err := session.Run(context.Background(), session.Spec{
-		Runtime:     "claude",
-		Command:     "claude",
-		Args:        []string{"--settings", "/path/to/settings.json", "-p", "Reply with the single word pong."},
-		PolicyPath:  os.ExpandEnv("$HOME/.config/qory/policy.yaml"),
-		WebhookPath: os.ExpandEnv("$HOME/.config/qory/webhook.yaml"),
-		Forwarder:   []string{exe, "forward"},
+		Runtime: "claude",
+		Command: "claude",
+		Args:    []string{"--settings", "/path/to/settings.json", "-p", "Reply with the single word pong."},
+		Policy:  &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: []string{"api.anthropic.com"}}},
+		Webhook: &session.Webhook{Version: 1, URL: "https://example.com/qory/events", Secret: os.Getenv("QORY_WEBHOOK_SECRET")},
+		// The hook command; it calls session.Forward, see Example_forward.
+		Forwarder: []string{exe, "forward"},
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "the run did not start:", err)

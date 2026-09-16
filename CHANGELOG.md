@@ -13,8 +13,9 @@ release may change what an existing document does, and says so under Upgrading.
   signature rules, the runtime descriptor schema, and the Claude Code descriptor with its
   fixtures. The `contracts` package embeds the directory and its tests validate every
   fixture against the schemas.
-- The session runner, `session.Run`: the policy read once and pinned, or observe with
-  no file; the loopback proxy in observe and enforce modes, one `run.egress` event per
+- The session runner, `session.Run`: the policy, given by the caller as a value and
+  validated against the schema, pinned with the digest of its canonical JSON, or observe
+  with none; the webhook configuration given the same way; the loopback proxy in observe and enforce modes, one `run.egress` event per
   connection and a 403 for a denied one; the session on a pseudo-terminal when
   interactive and on pipes otherwise, its output chunked into `run.log`; the runtime's
   descriptor mapping its JSON lines and its hook calls to session events; the hook

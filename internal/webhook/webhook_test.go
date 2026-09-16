@@ -7,38 +7,30 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/webhook"
 )
 
-func write(t *testing.T, fixture string) string {
+// fixture is the bytes of a contract fixture.
+func fixture(t *testing.T, name string) []byte {
 	t.Helper()
-	b, err := fs.ReadFile(contracts.FS, fixture)
+	b, err := fs.ReadFile(contracts.FS, name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := filepath.Join(t.TempDir(), filepath.Base(fixture))
-	if err := os.WriteFile(p, b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return p
+	return b
 }
 
-// TestConfigurationLoadsAndFilters pins the fixtures loading, the filter, and that no
-// path is no webhook.
-func TestConfigurationLoadsAndFilters(t *testing.T) {
-	if c, err := webhook.Load(""); c != nil || err != nil {
-		t.Errorf("no path: %v %v", c, err)
-	}
-	all, err := webhook.Load(write(t, "fixtures/webhook/all-events.yaml"))
+// TestConfigurationReadsAndFilters pins the fixtures reading, the filter, and that a
+// refused document is an error naming it.
+func TestConfigurationReadsAndFilters(t *testing.T) {
+	all, err := webhook.Read("all-events.yaml", fixture(t, "fixtures/webhook/all-events.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	some, err := webhook.Load(write(t, "fixtures/webhook/some-events.yaml"))
+	some, err := webhook.Read("some-events.yaml", fixture(t, "fixtures/webhook/some-events.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,9 +47,9 @@ func TestConfigurationLoadsAndFilters(t *testing.T) {
 		}
 	}
 	for _, f := range []string{"fixtures/invalid/webhook-no-secret.yaml", "fixtures/invalid/webhook-plain-http.yaml"} {
-		_, err := webhook.Load(write(t, f))
+		_, err := webhook.Read(f, fixture(t, f))
 		var we *webhook.Error
-		if !errors.As(err, &we) {
+		if !errors.As(err, &we) || we.Name != f {
 			t.Errorf("%s: %v", f, err)
 		}
 	}

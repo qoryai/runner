@@ -16,8 +16,8 @@ object does, because the file is read on its own and its format evolves with the
 product. A document addressed by a schema URL, read or written by a program, carries an
 integer that guards its reader, because the URL already names the group and the
 generation. The policy, the webhook configuration and the descriptor are on this side:
-the local files are the same objects a control plane will one day deliver over the
-wire, and the compose report `qory` writes is versioned the same way. CloudEvents adds
+the objects the command hands the runner are the ones a control plane will one day
+deliver over the wire, and the compose report `qory` writes is versioned the same way. CloudEvents adds
 its own `specversion: 1.0`, which is not ours to change.
 
 `v1` is the first generation of this namespace, not a stability promise. The runner
@@ -80,16 +80,18 @@ Stated so a receiver reads the record for what it is.
 One run, on a developer machine, with a webhook configured:
 
 1. The runner is given a launch spec: the program, its arguments, its environment and
-   directory, whether the session is interactive, the path of the policy file, the path
-   of the webhook configuration, the egress the harness declared, and the runtime name.
-   The spec comes from the `qory` command; the runner knows nothing of what composed it.
+   directory, whether the session is interactive, the policy document, the webhook
+   configuration, the egress the harness declared, and the runtime name. The spec comes
+   from the `qory` command, which read the policy and the webhook from its own
+   configuration; the runner knows nothing of what composed it or where it was read.
 2. The runner makes a run id, a UUID version 7, and the run directory
    `.qory/runs/<id>/` in the checkout.
-3. It reads the policy file once. Unreadable: the run does not start, the error names
-   the file. Absent: mode `observe`, everything allowed and recorded. Present: pinned.
-   The effective allow list is the policy's entries, or, when the harness declared
-   egress, the declared entries the policy covers (§The policy).
-4. It reads the webhook configuration once, when one is given. It posts one
+3. It validates the policy once. Refused by the schema: the run does not start. Absent:
+   mode `observe`, everything allowed and recorded. Present: pinned, with the digest of
+   its canonical JSON as its stamp. The effective allow list is the policy's entries,
+   or, when the harness declared egress, the declared entries the policy covers (§The
+   policy).
+4. It validates the webhook configuration once, when one is given. It posts one
    `ai.qory.ping` and waits for a 2xx. Anything else, or no answer, means the run does
    not start: a run someone asked to have observed is not run unobserved by accident.
    The `--local` flag of the command runs with the file sink alone. With no webhook
@@ -118,10 +120,11 @@ environment, with the run id it already holds; everything after is one code path
 
 ## The policy
 
-`policy.schema.json`. A YAML or JSON document in the user's configuration directory or at
-a path given on the command line; never inside the checkout, where the agent it
-constrains could write it. The same document a run start answer will carry once a
-control plane exists, so nothing is designed twice.
+`policy.schema.json`. The document the command hands the runner, from the machine's
+own configuration, never from inside the checkout, where the agent it constrains could
+write it: for `qory`, the `egress` section of `~/.config/qory/runner.yaml`. The same
+document a run start answer will carry once a control plane exists, so nothing is
+designed twice.
 
 ```yaml
 version: 1
@@ -234,8 +237,9 @@ pipes the runtime's standard output and standard error are chunked apart.
 
 ## The webhook
 
-`webhook.schema.json`. In the user's configuration directory beside the policy, or at a
-path given on the command line. Configuring one makes the run fail closed on the ping.
+`webhook.schema.json`. The document the command hands the runner, from the machine's
+own configuration: for `qory`, the `webhook` section of `~/.config/qory/runner.yaml`.
+Configuring one makes the run fail closed on the ping.
 
 ```yaml
 version: 1
@@ -248,8 +252,8 @@ events:                        # absent: every type
 ```
 
 `url` is `https`, or `http` to a loopback address for a receiver on the same machine.
-The secret is a literal here because the file lives outside any repository; it is never
-a fixture, never in a checkout, never in an event. `events` filters by full type name,
+The secret lives outside any repository, in the machine's configuration or its
+environment; it is never a fixture, never in a checkout, never in an event. `events` filters by full type name,
 `*` for all; the ping is always sent.
 
 **Delivery**, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers).
@@ -297,7 +301,7 @@ receiver written by anyone else follows this section, and may read that code.
 
 `descriptor.schema.json`. One YAML file per runtime under `runtimes/<name>/`, embedded
 in the binary as the default and overridden by `<name>.yaml` in a directory the command
-names, beside the policy. It has three parts.
+names, `~/.config/qory/runtimes/` for `qory`. It has three parts.
 
 **Sources**: how the runner attaches. The terminal bytes always, with nothing to match
 in them and so no source. `output`: JSON lines on the runtime's standard output, when the

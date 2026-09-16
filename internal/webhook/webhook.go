@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -43,36 +42,34 @@ type Config struct {
 	Events  []string `json:"events"`
 }
 
-// Error is a configuration that could not be read or is not a webhook configuration.
-// A run does not start on it.
+// Error is a document that is not a webhook configuration. A run does not start on
+// it.
 type Error struct {
-	Path string
+	// Name is what the caller called the document: a file name, or "webhook".
+	Name string
 	Err  error
 }
 
-func (e *Error) Error() string { return "webhook " + e.Path + ": " + e.Err.Error() }
+func (e *Error) Error() string { return "webhook " + e.Name + ": " + e.Err.Error() }
 
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
 
-// Load reads the configuration at path. An empty path is no webhook and returns nil.
-func Load(path string) (*Config, error) {
-	if path == "" {
-		return nil, nil
-	}
-	b, err := os.ReadFile(path)
+// Read reads a webhook configuration from bytes, YAML or JSON by name's extension,
+// JSON when it has none. A refused document is a [*Error] naming name.
+func Read(name string, b []byte) (*Config, error) {
+	c, err := Parse(name, b)
 	if err != nil {
-		return nil, &Error{Path: path, Err: err}
-	}
-	c, err := Parse(path, b)
-	if err != nil {
-		return nil, &Error{Path: path, Err: err}
+		return nil, &Error{Name: name, Err: err}
 	}
 	return c, nil
 }
 
 // Parse validates the bytes of a configuration against the schema and decodes it.
 func Parse(name string, b []byte) (*Config, error) {
+	if !strings.Contains(name, ".") {
+		name += ".json"
+	}
 	doc, err := contracts.Decode(name, b)
 	if err != nil {
 		return nil, err

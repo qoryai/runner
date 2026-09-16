@@ -1,10 +1,10 @@
 // Package policy reads the run policy and answers what it allows.
 //
-// The policy is the document of contracts/runner/v1/policy.schema.json, read once from
-// a file outside the checkout and pinned for the run. [Load] reads it: a path that
-// cannot be read is a [*Error] and no run; no path is the absent policy, mode observe
-// with nothing denied. The schema is the reader: a document the schema refuses is
-// refused here with the schema's message.
+// The policy is the document of contracts/runner/v1/policy.schema.json, given to the
+// runner once by its caller and pinned for the run. [Read] reads it from bytes: a
+// document the schema refuses is a [*Error] and no run; [None] is the absent policy,
+// mode observe with nothing denied. The schema is the reader: a refused document
+// carries the schema's message.
 //
 // A policy narrows only. [Loaded.Narrow] intersects it with the egress a harness
 // declared, and [Match] says which entry of an allow list covers a host. Nothing here
@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 
 	"github.com/qoryai/runner/contracts"
@@ -49,47 +48,53 @@ type Egress struct {
 // digest, which is the version stamp of the run's policy.
 type Loaded struct {
 	Policy Policy
-	// Source is "file" when a file was read, "none" when there was none.
+	// Source is "config" when a document was given, "none" when there was none.
 	Source string
-	// Path is the file read, when Source is "file".
-	Path string
-	// Digest is the hex sha256 of the file's bytes, when Source is "file".
+	// Digest is the hex sha256 of the document as canonical JSON, the runner's own
+	// serialization of it, when Source is "config": the version stamp of the run's
+	// policy, the same for the same policy however it was written.
 	Digest string
 }
 
-// Error is a policy that could not be read or is not a policy. A run does not start
-// on it.
+// Error is a document that is not a policy. A run does not start on it.
 type Error struct {
-	Path string
+	// Name is what the caller called the document: a file name, or "policy".
+	Name string
 	Err  error
 }
 
-func (e *Error) Error() string { return "policy " + e.Path + ": " + e.Err.Error() }
+func (e *Error) Error() string { return "policy " + e.Name + ": " + e.Err.Error() }
 
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
 
-// Load reads the policy at path, or returns the absent policy when path is empty. A
-// path that does not exist is an error: absent means not configured, not misnamed.
-func Load(path string) (*Loaded, error) {
-	if path == "" {
-		return &Loaded{Policy: Policy{Version: 1, Egress: Egress{Mode: Observe}}, Source: "none"}, nil
-	}
-	b, err := os.ReadFile(path)
+// None is the absent policy: observe everything, deny nothing, source none.
+func None() *Loaded {
+	return &Loaded{Policy: Policy{Version: 1, Egress: Egress{Mode: Observe}}, Source: "none"}
+}
+
+// Read reads a policy document from bytes, YAML or JSON by name's extension, JSON
+// when it has none, validates it and pins it with its digest. A refused document is a
+// [*Error] naming name.
+func Read(name string, b []byte) (*Loaded, error) {
+	p, err := Parse(name, b)
 	if err != nil {
-		return nil, &Error{Path: path, Err: err}
+		return nil, &Error{Name: name, Err: err}
 	}
-	p, err := Parse(path, b)
+	canonical, err := json.Marshal(p)
 	if err != nil {
-		return nil, &Error{Path: path, Err: err}
+		return nil, &Error{Name: name, Err: err}
 	}
-	sum := sha256.Sum256(b)
-	return &Loaded{Policy: *p, Source: "file", Path: path, Digest: hex.EncodeToString(sum[:])}, nil
+	sum := sha256.Sum256(canonical)
+	return &Loaded{Policy: *p, Source: "config", Digest: hex.EncodeToString(sum[:])}, nil
 }
 
 // Parse validates the bytes of a policy document against the schema and decodes it.
-// name chooses YAML or JSON by its extension.
+// name chooses YAML or JSON by its extension, JSON when it has none.
 func Parse(name string, b []byte) (*Policy, error) {
+	if !strings.Contains(name, ".") {
+		name += ".json"
+	}
 	doc, err := contracts.Decode(name, b)
 	if err != nil {
 		return nil, err

@@ -98,7 +98,7 @@ func fakeRuntime() int {
 
 // spec returns a spec running the fake runtime with the given policy path and
 // environment, in a fresh checkout directory.
-func spec(t *testing.T, policyPath string, env ...string) session.Spec {
+func spec(t *testing.T, pol *session.Policy, env ...string) session.Spec {
 	t.Helper()
 	dir := t.TempDir()
 	var out, errs bytes.Buffer
@@ -116,7 +116,7 @@ func spec(t *testing.T, policyPath string, env ...string) session.Spec {
 		Stdin:         strings.NewReader(""),
 		Stdout:        &out,
 		Stderr:        &errs,
-		PolicyPath:    policyPath,
+		Policy:        pol,
 		Forwarder:     []string{"env", "QORY_TEST_FORWARD=1", os.Args[0]},
 		RunnerVersion: "test",
 		Heartbeat:     10 * time.Millisecond,
@@ -128,15 +128,6 @@ func writeSettings(t *testing.T, dir string) string {
 	t.Helper()
 	p := filepath.Join(dir, "launch-settings.json")
 	if err := os.WriteFile(p, []byte(`{"permissions":{"allow":["Bash"]},"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"echo existing"}]}]}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return p
-}
-
-func writePolicy(t *testing.T, body string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "policy.yaml")
-	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return p
@@ -195,7 +186,7 @@ func data(e map[string]any) map[string]any { return e["data"].(map[string]any) }
 func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
 	defer origin.Close()
-	pol := writePolicy(t, "version: 1\negress:\n  mode: enforce\n  allow: [\"127.0.0.1\", \"api.anthropic.com\"]\n")
+	pol := &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1", "api.anthropic.com"}}}
 	sp := spec(t, pol, "FAKE_ALLOWED_URL="+origin.URL+"/allowed", "FAKE_DENIED_URL="+strings.Replace(origin.URL, "127.0.0.1", "localhost", 1)+"/denied", "FAKE_EXIT=3")
 	sp.Declared = []string{"127.0.0.1", "registry.npmjs.org"}
 	res, err := runWithSettingsEnv(t, sp)
@@ -210,7 +201,7 @@ func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 		t.Fatalf("event order: %v", types(evs))
 	}
 	applied := data(evs[1])
-	if applied["mode"] != "enforce" || applied["source"] != "file" || fmt.Sprint(applied["allow"]) != "[127.0.0.1]" || fmt.Sprint(applied["declared"]) != "[127.0.0.1 registry.npmjs.org]" || applied["digest"] == nil {
+	if applied["mode"] != "enforce" || applied["source"] != "config" || fmt.Sprint(applied["allow"]) != "[127.0.0.1]" || fmt.Sprint(applied["declared"]) != "[127.0.0.1 registry.npmjs.org]" || applied["digest"] == nil {
 		t.Errorf("policy_applied %v", applied)
 	}
 	egress := ofType(evs, "ai.qory.run.egress")
@@ -268,19 +259,19 @@ func types(evs []map[string]any) []string {
 	return out
 }
 
-// TestNoPolicyObservesAndNoWebhookNeedsNoPing pins the defaults: no policy file is
+// TestNoPolicyObservesAndNoWebhookNeedsNoPing pins the defaults: no policy is
 // observe with source none, a denied host is not denied, and nothing is posted.
 func TestNoPolicyObservesAndNoWebhookNeedsNoPing(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
 	defer origin.Close()
-	sp := spec(t, "", "FAKE_DENIED_URL="+strings.Replace(origin.URL, "127.0.0.1", "localhost", 1))
+	sp := spec(t, nil, "FAKE_DENIED_URL="+strings.Replace(origin.URL, "127.0.0.1", "localhost", 1))
 	sp.Forwarder = nil
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	evs := events(t, res)
-	if a := data(evs[1]); a["mode"] != "observe" || a["source"] != "none" || a["path"] != nil {
+	if a := data(evs[1]); a["mode"] != "observe" || a["source"] != "none" || a["digest"] != nil {
 		t.Errorf("policy_applied %v", a)
 	}
 	if e := ofType(evs, "ai.qory.run.egress"); len(e) != 1 || data(e[0])["decision"] != "allowed" || data(e[0])["rule"] != "" {
@@ -294,10 +285,10 @@ func TestNoPolicyObservesAndNoWebhookNeedsNoPing(t *testing.T) {
 	}
 }
 
-// TestUnreadablePolicyMeansNoRun pins the rule: a policy path that cannot be read is
-// an error before anything starts, and no run directory is made.
-func TestUnreadablePolicyMeansNoRun(t *testing.T) {
-	sp := spec(t, filepath.Join(t.TempDir(), "missing.yaml"))
+// TestInvalidPolicyMeansNoRun pins the rule: a policy the schema refuses is an error
+// before anything starts, and no run directory is made.
+func TestInvalidPolicyMeansNoRun(t *testing.T) {
+	sp := spec(t, &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "log"}})
 	_, err := session.Run(context.Background(), sp)
 	var pe *policy.Error
 	if !errors.As(err, &pe) {
@@ -326,12 +317,11 @@ func TestWebhookPingsFailsClosedAndDelivers(t *testing.T) {
 		(&receiver.Handler{Secret: "fixture-secret-not-a-real-one", Store: store}).ServeHTTP(w, r)
 	}))
 	defer srv.Close()
-	cfg := filepath.Join(t.TempDir(), "webhook.yaml")
-	os.WriteFile(cfg, []byte("version: 1\nurl: "+srv.URL+"/events\nsecret: fixture-secret-not-a-real-one\n"), 0o600)
+	cfg := &session.Webhook{Version: 1, URL: srv.URL + "/events", Secret: "fixture-secret-not-a-real-one"}
 
-	sp := spec(t, "")
+	sp := spec(t, nil)
 	sp.Forwarder = nil
-	sp.WebhookPath = cfg
+	sp.Webhook = cfg
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
@@ -345,9 +335,9 @@ func TestWebhookPingsFailsClosedAndDelivers(t *testing.T) {
 	}
 
 	refuse = true
-	sp = spec(t, "")
+	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.WebhookPath = cfg
+	sp.Webhook = cfg
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "ping") {
 		t.Errorf("refused ping: %v", err)
 	}
@@ -357,9 +347,9 @@ func TestWebhookPingsFailsClosedAndDelivers(t *testing.T) {
 		t.Errorf("the refused run's file holds more than the ping:\n%s", evs)
 	}
 
-	sp = spec(t, "")
+	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.WebhookPath = cfg
+	sp.Webhook = cfg
 	sp.Local = true
 	if res, err := session.Run(context.Background(), sp); err != nil || len(ofType(events(t, res), "ai.qory.ping")) != 0 {
 		t.Errorf("local run: %v", err)
@@ -369,7 +359,7 @@ func TestWebhookPingsFailsClosedAndDelivers(t *testing.T) {
 // TestInteractiveRunsOnAPseudoTerminal pins the PTY path: the output is one terminal
 // stream with the terminal's line endings, and the exit status is the program's.
 func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
-	sp := spec(t, "")
+	sp := spec(t, nil)
 	sp.Forwarder = nil
 	sp.Interactive = true
 	sp.Command = "sh"
@@ -393,7 +383,7 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 // TestContextEndStopsTheRuntime pins that a cancelled context ends the session with a
 // signal, recorded as such.
 func TestContextEndStopsTheRuntime(t *testing.T) {
-	sp := spec(t, "")
+	sp := spec(t, nil)
 	sp.Forwarder = nil
 	sp.Command = "sh"
 	sp.Args = []string{"-c", "sleep 30"}

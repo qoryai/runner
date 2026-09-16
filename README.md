@@ -23,25 +23,21 @@ qory run claude -- -p "Reply pong"      # one headless turn
 
 Every connection the runtime makes goes through the runner's proxy and is recorded; the
 session is written to `.qory/runs/<id>/` in the checkout as `events.jsonl`, one
-CloudEvent per line, beside `output.log`, the session's bytes. Two optional files in
-`~/.config/qory` change what the runner does. `policy.yaml` is the ceiling on what the
-runtime may reach; without it everything is allowed and recorded:
+CloudEvent per line, beside `output.log`, the session's bytes. One optional file,
+`~/.config/qory/runner.yaml`, never in a repository, changes what the runner does.
+`egress` is the ceiling on what the runtime may reach; without it everything is allowed
+and recorded. `webhook` posts every event somewhere as well, signed; with it configured
+the runner does not start unless the receiver answers, and `qory run --local` runs with
+the files alone:
 
 ```yaml
-version: 1
+apiVersion: qory.dev/v1alpha1
 egress:
   mode: enforce                         # or observe: record everything, deny nothing
   allow: [api.anthropic.com, "*.github.com"]
-```
-
-`webhook.yaml` posts every event somewhere as well, signed; with it configured the
-runner does not start unless the receiver answers, and `qory run --local` runs with the
-files alone:
-
-```yaml
-version: 1
-url: https://example.com/qory/events
-secret: sixteen-characters-at-least    # a placeholder; the real one is not in a repository
+webhook:                                # optional
+  url: https://example.com/qory/events
+  secret: sixteen-characters-at-least   # or QORY_WEBHOOK_SECRET in the environment
 ```
 
 A denied connection is one `403` to the runtime and one `ai.qory.run.egress` event with
@@ -54,12 +50,12 @@ are flushed:
 
 ```go
 res, err := session.Run(ctx, session.Spec{
-	Runtime:     "claude",                        // names the runtime descriptor
-	Command:     "claude",
-	Args:        []string{"--settings", settings, "-p", "Reply pong."},
-	PolicyPath:  policy,                          // "" is observe everything
-	WebhookPath: webhook,                         // "" is files only
-	Forwarder:   []string{exe, "forward"},        // the hook command, see below
+	Runtime:   "claude",                          // names the runtime descriptor
+	Command:   "claude",
+	Args:      []string{"--settings", settings, "-p", "Reply pong."},
+	Policy:    &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: hosts}},
+	Webhook:   nil,                               // files only; a *session.Webhook posts as well
+	Forwarder: []string{exe, "forward"},          // the hook command, see below
 })
 if err != nil {                                   // the run did not start
 	return err
