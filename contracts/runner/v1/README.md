@@ -5,6 +5,27 @@ coding agent session: the only thing between the agent and the world. This direc
 its contract: the documents, one JSON schema per document, and the fixtures a reader or
 a receiver is tested against.
 
+## Versions
+
+Every document here carries `version: 1`, an integer, and its schema is addressed by
+URL under `https://qory.dev/contracts/runner/v1/`. The harness contract of `qory`
+spells its version differently, `apiVersion: qory.dev/v1alpha1`, and the difference is
+the rule, not an accident. A document a person writes and commits, the stack and the
+module manifest, carries the group and the version together, the way a Kubernetes
+object does, because the file is read on its own and its format evolves with the
+product. A document addressed by a schema URL, read or written by a program, carries an
+integer that guards its reader, because the URL already names the group and the
+generation. The policy, the webhook configuration and the descriptor are on this side:
+the local files are the same objects a control plane will one day deliver over the
+wire, and the compose report `qory` writes is versioned the same way. CloudEvents adds
+its own `specversion: 1.0`, which is not ours to change.
+
+`v1` is the first generation of this namespace, not a stability promise. The runner
+module is at `v0`, which under Go's rules promises no compatibility, and until it
+reaches `v1` a document or an event here may change in a way that breaks a reader; the
+changelog says when one does. A breaking change after that is a new event type or a new
+directory, `v2`, never a change in place.
+
 ## The boundary
 
 The runner's duties, in the order that matters when they conflict:
