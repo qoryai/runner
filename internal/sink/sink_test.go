@@ -46,6 +46,28 @@ func TestFileSinkWritesBothRecords(t *testing.T) {
 	}
 }
 
+// TestWriterSinkWritesTheLineTheFileHolds pins that the writer sink and the file sink
+// write the same bytes for the same event, and that closing it leaves the stream open.
+func TestWriterSinkWritesTheLineTheFileHolds(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	f, err := sink.NewFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	both := sink.Multi{f, sink.NewWriter(&out)}
+	e := event.NewEmitter(event.NewRunID(), nil)
+	both.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
+	both.Write(e.Make(event.RunExited, map[string]any{"state": "succeeded"}))
+	if err := both.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events, _ := os.ReadFile(filepath.Join(dir, sink.EventsFile))
+	if out.String() != string(events) || strings.Count(out.String(), "\n") != 2 {
+		t.Errorf("the writer got\n%s\nthe file\n%s", out.String(), events)
+	}
+}
+
 // station is a receiver in front of a store, with a failure mode the test flips.
 type station struct {
 	srv   *httptest.Server

@@ -70,3 +70,31 @@ func TestForwardedHookInputArrivesAsAHooksRecord(t *testing.T) {
 		t.Error("the socket was not removed")
 	}
 }
+
+// TestTheVariableIsAnAddress pins that the forwarder reads its variable as an address:
+// a path and unix: with a path are the local socket, and a scheme it does not have is
+// refused by name, so a transport can be added without an old forwarder opening a file
+// called tcp:relay:1.
+func TestTheVariableIsAnAddress(t *testing.T) {
+	l, err := socket.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	n := 0
+	go l.Serve(func(descriptor.Record) { mu.Lock(); n++; mu.Unlock() }, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := socket.Forward(ctx, "unix:"+l.Path(), strings.NewReader(`{"a":1}`)); err != nil {
+		t.Error(err)
+	}
+	if err := socket.Forward(ctx, "tcp:qory-proxy:3129", strings.NewReader(`{"a":1}`)); err == nil || !strings.Contains(err.Error(), `"tcp"`) {
+		t.Errorf("a transport this forwarder does not have: %v", err)
+	}
+	l.Close()
+	mu.Lock()
+	defer mu.Unlock()
+	if n != 1 {
+		t.Errorf("%d records arrived", n)
+	}
+}

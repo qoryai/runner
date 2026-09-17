@@ -1,0 +1,453 @@
+package wall
+
+import (
+	"bytes"
+	"context"
+	"debug/elf"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/internal/socket"
+)
+
+// Where things are inside a Docker enclosure.
+const (
+	// HelperPath is where the helper binary is mounted, read-only. A caller names it in
+	// the hook forwarder's command, since the host's own path does not exist inside.
+	HelperPath = "/qory/qory"
+	// hooksDir is where the directory holding the hook socket is mounted.
+	hooksDir = "/qory/hooks"
+	// relayAlias is the name the agent reaches the relay by, and relayPort the port the
+	// relay forwards to the proxy.
+	relayAlias = "qory-proxy"
+	relayPort  = 3128
+	// hostName is the name an ordinary container reaches the engine's host by.
+	hostName = "host.docker.internal"
+)
+
+// Docker is the wall built with the docker command, and with podman or nerdctl when the
+// conformance suite passes for them. It uses the command and no library, and serves
+// whatever engine that command reaches.
+//
+// A run gets two networks and two containers. The agent's container is on a network
+// created with --internal and on nothing else, so it has no route out and its resolver
+// knows only that network; the network's bridge gets no address, so the engine's host is
+// not on it either. The relay's container is on that network and on an ordinary
+// one; it runs [Relay], forwarding one port to the session runner's proxy, and is the
+// one peer the agent can reach. Both run as a user that is not root, with every
+// capability dropped and no new privileges.
+type Docker struct {
+	// Command is the program to run; empty means docker.
+	Command string
+	// Helper is the path on this machine of a static Linux build, for the engine's
+	// architecture, of the binary that runs the relay and the hook forwarder. It is
+	// mounted read-only at [HelperPath] in both containers.
+	Helper string
+	// RelayArgs are the arguments that make Helper run [Relay]; the forwards follow
+	// them.
+	RelayArgs []string
+	// User is the uid:gid both containers run as; empty means this process's own, so
+	// the workspace's files keep their owner. Root is refused.
+	User string
+
+	sys system
+}
+
+// system is what the adapter asks of the machine, so a test records the commands and
+// needs neither Docker nor Linux.
+type system interface {
+	// run runs a command and returns its output, standard error included.
+	run(ctx context.Context, argv []string) ([]byte, error)
+	// local reports whether this machine holds the address.
+	local(ip string) bool
+	// tempDir makes a private directory.
+	tempDir() (string, error)
+	// ids are this process's user and group.
+	ids() (int, int)
+	// checkHelper refuses a helper that cannot run in a Linux container.
+	checkHelper(path string) error
+}
+
+// What goes on a command line is checked for its shape first, because a word that
+// starts with a dash is a flag to the command that reads it: a run id names things, an
+// image is a reference, a user is uid[:gid] or a name, a variable is NAME=value.
+var (
+	runIDShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+	imageShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
+	userShape  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?$`)
+	envShape   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+)
+
+// Name is docker, or the command's name when another was given.
+func (d *Docker) Name() string {
+	if d.Command == "" {
+		return "docker"
+	}
+	return filepath.Base(d.Command)
+}
+
+// Prepare creates the run's two networks and decides where the proxy must listen: on
+// the ordinary network's gateway when this machine holds that address, as on a Linux
+// host, and on loopback otherwise, where the engine is in a virtual machine and reaches
+// this machine's loopback by a name.
+func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
+	sys := d.sys
+	if sys == nil {
+		sys = hostSystem{}
+	}
+	if !runIDShape.MatchString(req.RunID) {
+		return nil, fmt.Errorf("wall docker: the run id %q cannot name a container", req.RunID)
+	}
+	if !imageShape.MatchString(req.Image) {
+		return nil, fmt.Errorf("wall docker: %q is not an image reference", req.Image)
+	}
+	if d.Helper == "" || len(d.RelayArgs) == 0 {
+		return nil, errors.New("wall docker: the helper binary and its relay arguments are required")
+	}
+	if err := sys.checkHelper(d.Helper); err != nil {
+		return nil, fmt.Errorf("wall docker: helper %s: %w", d.Helper, err)
+	}
+	user := d.User
+	if user == "" {
+		uid, gid := sys.ids()
+		user = fmt.Sprintf("%d:%d", uid, gid)
+	}
+	if !userShape.MatchString(user) {
+		return nil, fmt.Errorf("wall docker: the user %q is not uid[:gid] or a name", user)
+	}
+	uid, _, _ := strings.Cut(user, ":")
+	if n, err := strconv.Atoi(uid); uid == "root" || (err == nil && n == 0) {
+		return nil, errors.New("wall docker: the agent does not run as root; name a user")
+	}
+	e := &dockerEnclosure{d: d, sys: sys, req: req, user: user, base: "qory-" + req.RunID}
+	// What removes a thing is noted before the thing is asked for: a command cut off by
+	// the context may still have been carried out by the engine.
+	//
+	// The inside network's bridge gets no address of the host's. With one, the network's
+	// gateway is the engine's host, and what listens there on every address is a route
+	// out of the enclosure.
+	e.made = append(e.made, []string{"network", "rm", e.inside()})
+	if _, err := e.docker(ctx, "network", "create", "--internal", "--opt", "com.docker.network.bridge.inhibit_ipv4=true", "--label", e.label(), e.inside()); err != nil {
+		return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
+	}
+	e.made = append(e.made, []string{"network", "rm", e.outside()})
+	if _, err := e.docker(ctx, "network", "create", "--label", e.label(), e.outside()); err != nil {
+		return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
+	}
+	out, err := e.docker(ctx, "network", "inspect", "--format", "{{range .IPAM.Config}}{{.Gateway}} {{end}}", e.outside())
+	if err != nil {
+		return nil, errors.Join(err, e.Close(context.WithoutCancel(ctx)))
+	}
+	e.host = hostName
+	for _, gw := range strings.Fields(string(out)) {
+		if ip := net.ParseIP(gw); ip != nil && ip.To4() != nil && sys.local(gw) {
+			e.host = gw
+			break
+		}
+	}
+	return e, nil
+}
+
+// dockerEnclosure is one run's networks and containers.
+type dockerEnclosure struct {
+	d    *Docker
+	sys  system
+	req  Request
+	user string
+	base string
+	// host is how the relay reaches this machine: the gateway's address, or hostName.
+	host string
+	// made holds the commands that remove what was created, in the order created.
+	made [][]string
+	temp string
+}
+
+func (e *dockerEnclosure) inside() string  { return e.base + "-in" }
+func (e *dockerEnclosure) outside() string { return e.base + "-out" }
+func (e *dockerEnclosure) relay() string   { return e.base + "-relay" }
+func (e *dockerEnclosure) agent() string   { return e.base + "-agent" }
+func (e *dockerEnclosure) label() string   { return "ai.qory.run=" + e.req.RunID }
+
+// docker runs one docker command; a failure carries what the command printed.
+func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, error) {
+	argv := append([]string{e.command()}, args...)
+	out, err := e.sys.run(ctx, argv)
+	if err != nil {
+		return out, fmt.Errorf("wall docker: %s: %w: %s", strings.Join(argv[:min(3, len(argv))], " "), err, bytes.TrimSpace(out))
+	}
+	return out, nil
+}
+
+func (e *dockerEnclosure) command() string {
+	if e.d.Command == "" {
+		return "docker"
+	}
+	return e.d.Command
+}
+
+// ProxyAddr is the gateway's address when this machine holds it, else loopback.
+func (e *dockerEnclosure) ProxyAddr() string {
+	if e.host == hostName {
+		return proxy.Loopback
+	}
+	return net.JoinHostPort(e.host, "0")
+}
+
+// hardening is what both containers run with: not root, no capabilities, no way to
+// gain any, and an init that reaps and passes signals on.
+func (e *dockerEnclosure) hardening() []string {
+	return []string{"--user", e.user, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--init"}
+}
+
+// relayWait is how long the relay has to listen, the image's pull included.
+const relayWait = 5 * time.Minute
+
+// Wrap starts the relay towards the proxy, waits until it listens, and returns the
+// docker run that starts the launch in the agent's container: on the internal network
+// only, the workspace and the launch's mounts at their own paths, the helper read-only,
+// the socket's directory, and the launch's environment through a file, so no value is on a
+// command line.
+func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
+	_, port, err := net.SplitHostPort(l.Proxy)
+	if err != nil {
+		return Launch{}, fmt.Errorf("wall docker: the proxy's address: %w", err)
+	}
+	mounts, err := e.mounts(l)
+	if err != nil {
+		return Launch{}, err
+	}
+	helper, err := mount(e.d.Helper, HelperPath, true)
+	if err != nil {
+		return Launch{}, err
+	}
+	// Everything that can be refused is, before anything is started.
+	env := append([]string(nil), l.Env...)
+	env = append(env, proxy.EnvFor(fmt.Sprintf("http://%s:%d", relayAlias, relayPort))...)
+	if l.Socket != "" {
+		env = append(env, socket.Env+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
+	}
+	envFile, err := e.envFile(env)
+	if err != nil {
+		return Launch{}, err
+	}
+
+	create := []string{"create", "--name", e.relay(), "--label", e.label(), "--network", e.outside()}
+	if e.host == hostName {
+		create = append(create, "--add-host", hostName+":host-gateway")
+	}
+	create = append(create, e.hardening()...)
+	create = append(create, "--read-only", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
+	create = append(create, e.d.RelayArgs...)
+	create = append(create, fmt.Sprintf("%d=%s", relayPort, net.JoinHostPort(e.host, port)))
+	pull, cancel := context.WithTimeout(ctx, relayWait)
+	defer cancel()
+	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.relay()})
+	if _, err := e.docker(pull, create...); err != nil {
+		return Launch{}, err
+	}
+	if _, err := e.docker(ctx, "network", "connect", "--alias", relayAlias, e.inside(), e.relay()); err != nil {
+		return Launch{}, err
+	}
+	if _, err := e.docker(ctx, "start", e.relay()); err != nil {
+		return Launch{}, err
+	}
+	if err := e.relayListens(ctx); err != nil {
+		return Launch{}, err
+	}
+
+	run := []string{"run", "--rm", "--interactive"}
+	if l.Interactive {
+		run = append(run, "--tty")
+	}
+	run = append(run, "--name", e.agent(), "--label", e.label(), "--network", e.inside())
+	run = append(run, e.hardening()...)
+	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
+	for _, m := range mounts {
+		run = append(run, "--mount", m)
+	}
+	run = append(run, "--entrypoint", l.Command, e.req.Image)
+	run = append(run, l.Args...)
+	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
+	return Launch{Command: e.command(), Args: run, Dir: l.Dir}, nil
+}
+
+// mounts are the launch's own: the workspace, what it lists, the socket's directory.
+func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
+	if !filepath.IsAbs(l.Dir) {
+		return nil, fmt.Errorf("wall docker: the workspace %q is not an absolute path", l.Dir)
+	}
+	binds := []bind{{l.Dir, l.Dir, false}}
+	for _, m := range l.Mounts {
+		if !filepath.IsAbs(m.Path) {
+			return nil, fmt.Errorf("wall docker: the mount %q is not an absolute path", m.Path)
+		}
+		binds = append(binds, bind{m.Path, m.Path, m.ReadOnly})
+	}
+	if l.Socket != "" {
+		binds = append(binds, bind{filepath.Dir(l.Socket), hooksDir, false})
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, b := range binds {
+		// The workspace is often one of the mounts the run lists; the first wins.
+		if seen[b.dst] {
+			continue
+		}
+		seen[b.dst] = true
+		m, err := mount(b.src, b.dst, b.readonly)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// bind is one directory or file of the host shown inside.
+type bind struct {
+	src, dst string
+	readonly bool
+}
+
+// mount is one --mount value. The value is comma-separated fields, so a path holding a
+// comma or a quote is refused rather than quoted wrongly.
+func mount(src, dst string, readonly bool) (string, error) {
+	for _, p := range []string{src, dst} {
+		if strings.ContainsAny(p, ",\"\n") {
+			return "", fmt.Errorf("wall docker: the path %q holds a comma or a quote and cannot be mounted", p)
+		}
+	}
+	m := "type=bind,src=" + src + ",dst=" + dst
+	if readonly {
+		m += ",readonly"
+	}
+	return m, nil
+}
+
+// envFile writes the enclosure's environment where only this user reads it. The file's
+// format is a line per variable with no quoting, so a value holding a newline cannot be
+// passed.
+func (e *dockerEnclosure) envFile(env []string) (string, error) {
+	var b strings.Builder
+	for _, kv := range env {
+		// A bare name in the file means the value of the docker command's own variable,
+		// which is this machine's.
+		if !envShape.MatchString(kv) {
+			name, _, _ := strings.Cut(kv, "=")
+			return "", fmt.Errorf("wall docker: the environment entry %q is not NAME=value", name)
+		}
+		if strings.ContainsAny(kv, "\n\r") {
+			name, _, _ := strings.Cut(kv, "=")
+			return "", fmt.Errorf("wall docker: the value of %s holds a line break and cannot be passed", name)
+		}
+		b.WriteString(kv + "\n")
+	}
+	if e.temp == "" {
+		dir, err := e.sys.tempDir()
+		if err != nil {
+			return "", err
+		}
+		e.temp = dir
+	}
+	file := filepath.Join(e.temp, "env")
+	return file, os.WriteFile(file, []byte(b.String()), 0o600)
+}
+
+// relayListens polls the relay's output for [RelayReady]. A relay that exited instead
+// is an error carrying what it printed.
+func (e *dockerEnclosure) relayListens(ctx context.Context) error {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		out, err := e.docker(ctx, "logs", e.relay())
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(out, []byte(RelayReady)) {
+			return nil
+		}
+		if state, err := e.docker(ctx, "inspect", "--format", "{{.State.Running}}", e.relay()); err == nil && strings.TrimSpace(string(state)) == "false" {
+			return fmt.Errorf("wall docker: the relay exited: %s", bytes.TrimSpace(out))
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("wall docker: the relay did not listen: %s", bytes.TrimSpace(out))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// closeWait is how long removing everything may take.
+const closeWait = 30 * time.Second
+
+// Close removes the containers and the networks, newest first, and the environment
+// file. What is already gone, or was never made, is not an error.
+func (e *dockerEnclosure) Close(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, closeWait)
+	defer cancel()
+	var errs []error
+	for i := len(e.made) - 1; i >= 0; i-- {
+		out, err := e.docker(ctx, e.made[i]...)
+		if gone := bytes.ToLower(out); err != nil && !bytes.Contains(gone, []byte("no such")) && !bytes.Contains(gone, []byte("not found")) {
+			errs = append(errs, err)
+		}
+	}
+	e.made = nil
+	if e.temp != "" {
+		errs = append(errs, os.RemoveAll(e.temp))
+		e.temp = ""
+	}
+	return errors.Join(errs...)
+}
+
+// hostSystem is the machine itself.
+type hostSystem struct{}
+
+func (hostSystem) run(ctx context.Context, argv []string) ([]byte, error) {
+	return exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
+}
+
+func (hostSystem) local(ip string) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.String() == ip {
+			return true
+		}
+	}
+	return false
+}
+
+func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", "qory-wall-") }
+
+func (hostSystem) ids() (int, int) { return os.Getuid(), os.Getgid() }
+
+// checkHelper opens the helper as the executable a Linux container needs: ELF, and
+// static, because the container's image may hold no loader.
+func (hostSystem) checkHelper(path string) error {
+	f, err := elf.Open(path)
+	if err != nil {
+		return fmt.Errorf("not a Linux executable: %w", err)
+	}
+	defer f.Close()
+	for _, p := range f.Progs {
+		if p.Type == elf.PT_INTERP {
+			return errors.New("dynamically linked; build it with CGO_ENABLED=0")
+		}
+	}
+	return nil
+}

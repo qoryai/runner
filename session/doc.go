@@ -6,7 +6,10 @@
 //
 //   - reads the policy once and pins it; an unreadable policy is a [*policy.Error] and
 //     no run, no policy is observe everything
-//   - starts a loopback proxy in the policy's mode and points the session at it
+//   - starts a proxy in the policy's mode, on loopback or where the wall says, and
+//     points the session at it
+//   - with a [wall.Wall] in the spec, starts the runtime inside an enclosure whose only
+//     route out leads to that proxy, and removes the enclosure at exit
 //   - keeps every credential of the runner's out of the session: the session's
 //     environment is the caller's plus the proxy and socket variables, nothing else
 //   - heartbeats while the runtime runs and reports the exit as the result

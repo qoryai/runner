@@ -22,6 +22,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/qoryai/runner/internal/descriptor"
@@ -126,12 +127,25 @@ func (l *Listener) Close() error {
 	return err
 }
 
+// network reads the value of [Env]. It is an address, not a path: a path, or unix: and a
+// path, is the local socket; another scheme is a transport, and a forwarder that does
+// not have it says so instead of opening a file of that name.
+func network(addr string) (string, string, error) {
+	if path, ok := strings.CutPrefix(addr, "unix:"); ok {
+		return "unix", path, nil
+	}
+	if scheme, _, ok := strings.Cut(addr, ":"); ok && !strings.ContainsAny(scheme, "/.") {
+		return "", "", fmt.Errorf("%s names the transport %q, which this forwarder does not have", Env, scheme)
+	}
+	return "unix", addr, nil
+}
+
 // Forward reads one JSON object from r, wraps it as a record of the hooks source and
-// writes it to the socket at path as one line. It is what a hook command does: the
+// writes it to the socket at addr, the value of [Env], as one line. It is what a hook command does: the
 // runtime writes the hook's input on the command's standard input, the command forwards
 // it and exits 0 with no output, which the runtime reads as no decision. An input that
 // is not a JSON object is an error and nothing is sent.
-func Forward(ctx context.Context, path string, r io.Reader) error {
+func Forward(ctx context.Context, addr string, r io.Reader) error {
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -147,8 +161,12 @@ func Forward(ctx context.Context, path string, r io.Reader) error {
 	if err != nil {
 		return err
 	}
+	netw, path, err := network(addr)
+	if err != nil {
+		return err
+	}
 	var d net.Dialer
-	conn, err := d.DialContext(ctx, "unix", path)
+	conn, err := d.DialContext(ctx, netw, path)
 	if err != nil {
 		return err
 	}

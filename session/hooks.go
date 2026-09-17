@@ -15,14 +15,14 @@ const hookTimeout = 5
 
 // installHooks adds the forwarder as a command hook for each of the descriptor's
 // events, the way the descriptor's installer says, and returns the arguments that make
-// the runtime read it. The one installer today, claude-settings, reads the JSON file
+// the runtime read it and the file they name. The one installer today, claude-settings, reads the JSON file
 // the arguments name after --settings, or starts from an empty document when they name
 // none, adds a hook group per event under "hooks", writes the result as settings.json
 // in the run directory, and names that file instead. The file the launch passed is not
 // modified.
-func installHooks(hooks *descriptor.Hooks, args []string, dir string, forwarder []string) ([]string, error) {
+func installHooks(hooks *descriptor.Hooks, args []string, dir string, forwarder []string) ([]string, string, error) {
 	if hooks.Install != "claude-settings" {
-		return nil, fmt.Errorf("hook installer %q is not one this runner implements", hooks.Install)
+		return nil, "", fmt.Errorf("hook installer %q is not one this runner implements", hooks.Install)
 	}
 	settings := map[string]any{}
 	at := -1
@@ -44,10 +44,10 @@ func installHooks(hooks *descriptor.Hooks, args []string, dir string, forwarder 
 		if strings.HasPrefix(strings.TrimSpace(args[at]), "{") {
 			b = []byte(args[at])
 		} else if b, err = os.ReadFile(args[at]); err != nil {
-			return nil, fmt.Errorf("settings %s: %w", args[at], err)
+			return nil, "", fmt.Errorf("settings %s: %w", args[at], err)
 		}
 		if err := json.Unmarshal(b, &settings); err != nil {
-			return nil, fmt.Errorf("settings %s: %w", args[at], err)
+			return nil, "", fmt.Errorf("settings %s: %w", args[at], err)
 		}
 	}
 	groups, _ := settings["hooks"].(map[string]any)
@@ -62,18 +62,18 @@ func installHooks(hooks *descriptor.Hooks, args []string, dir string, forwarder 
 	settings["hooks"] = groups
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	path := filepath.Join(dir, "settings.json")
 	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if at >= 0 {
 		args = append([]string(nil), args...)
 		args[at] = path
-		return args, nil
+		return args, path, nil
 	}
-	return append(append([]string(nil), args...), "--settings", path), nil
+	return append(append([]string(nil), args...), "--settings", path), path, nil
 }
 
 // shellLine quotes a command for a shell, since a command hook runs under sh -c.
