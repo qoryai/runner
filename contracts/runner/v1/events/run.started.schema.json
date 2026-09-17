@@ -14,6 +14,8 @@
     "dir": {"description": "The working directory the runtime starts in.", "type": "string", "minLength": 1},
     "interactive": {"description": "True when the session runs on a pseudo-terminal, false on pipes.", "type": "boolean"},
     "runner_version": {"type": "string", "minLength": 1},
-    "host": {"description": "The machine's host name.", "type": "string", "minLength": 1}
+    "host": {"description": "The machine's host name.", "type": "string", "minLength": 1},
+    "wall": {"description": "The adapter that built the enclosure the runtime runs in: docker. Absent when there is no wall, where command and dir are the machine's own; present, they are the enclosure's.", "type": "string", "minLength": 1},
+    "image": {"description": "The image the enclosure runs, as the run named it. Present with wall.", "type": "string", "minLength": 1}
   }
 }

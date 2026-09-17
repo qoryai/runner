@@ -52,3 +52,25 @@ jobs:
 
       - name: Check doc comments
         run: go run github.com/mgechev/revive@v1.16.0 -config revive.toml -set_exit_status ./...
+
+  wall:
+    name: Wall conformance
+    # On the machine itself, not in a container: the suite needs the docker command and
+    # an engine it reaches, and a Linux host is where the hook socket crosses a mount, so
+    # this is where an adapter is proven.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Run the suite against Docker
+        # The test binary is the relay, the forwarder and the probe inside the enclosure,
+        # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
+        # cannot pass by proving nothing.
+        env:
+          CGO_ENABLED: "0"
+          QORY_WALL_REQUIRE: "1"
+        run: go test ./wall/walltest -count=1 -v

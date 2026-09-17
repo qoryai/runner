@@ -20,14 +20,16 @@ import (
 	"github.com/qoryai/runner/internal/sink"
 	"github.com/qoryai/runner/internal/socket"
 	"github.com/qoryai/runner/internal/webhook"
+	"github.com/qoryai/runner/wall"
 )
 
 // Spec is what one run is given.
 type Spec struct {
 	// Runtime names the descriptor: claude, codex.
 	Runtime string
-	// Command, Args, Env and Dir are what to start. A nil Env is the process's own; an
-	// empty Dir is the working directory.
+	// Command, Args, Env and Dir are what to start. A nil Env is the process's own, or
+	// nothing under a Wall, where only what Env lists goes in; an empty Dir is the
+	// working directory.
 	Command string
 	Args    []string
 	Env     []string
@@ -45,6 +47,26 @@ type Spec struct {
 	// ignores it.
 	Webhook *Webhook
 	Local   bool
+	// Events, when not nil, gets every event as one JSON line as well, the line
+	// events.jsonl holds: a run with no receiver is followed on standard output this
+	// way. Local does not silence it.
+	Events io.Writer
+	// ProxyBind is the address the proxy listens on, host:port; empty means a loopback
+	// port. A caller that builds an enclosure of its own names the address the
+	// enclosure reaches here. It is not set together with Wall, which names its own.
+	ProxyBind string
+	// Wall, when not nil, encloses the runtime: the command is started inside an
+	// enclosure whose only route out leads to the proxy, in Image, with Dir as its
+	// workspace. Command, Args and Forwarder are then paths inside the enclosure. Nil
+	// means no wall: the runtime is this machine's process, and enforcement is
+	// cooperative.
+	Wall wall.Wall
+	// Image is the agent's image under a Wall.
+	Image string
+	// Mounts are what the enclosure shows of this machine beside Dir, each at its own
+	// path: the checkout around Dir, a composed home outside it. The runner adds the
+	// run directory, read-only. Without a Wall they mean nothing.
+	Mounts []wall.Mount
 	// Declared is the egress the harness declared, nil when nothing was.
 	Declared []string
 	// RunsDir holds the run directories; empty means Dir/.qory/runs.
@@ -90,8 +112,8 @@ const closeWait = 15 * time.Second
 
 // Run runs one session and returns when the runtime has exited and the sinks are
 // flushed. An error means the run did not start: the policy or the webhook could not
-// be read, the receiver did not accept the ping, the descriptor is unknown, or the
-// program could not be started. Once the runtime runs, its exit is the result and not
+// be read, the receiver did not accept the ping, the descriptor is unknown, the wall
+// could not be built, or the program could not be started. Once the runtime runs, its exit is the result and not
 // an error. The context ending stops the runtime.
 func Run(ctx context.Context, spec Spec) (*Result, error) {
 	spec = withDefaults(spec)
@@ -114,6 +136,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	if spec.Wall != nil && spec.ProxyBind != "" {
+		return nil, errors.New("the spec names a wall and a proxy address; the wall names its own")
+	}
 	runID := spec.RunID
 	if runID == "" {
 		runID = event.NewRunID()
@@ -125,14 +150,17 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return nil, err
 	}
 	sinks := sink.Multi{files}
+	if spec.Events != nil {
+		sinks = append(sinks, sink.NewWriter(spec.Events))
+	}
 	var posts *sink.Webhook
 	if hook != nil {
 		client := &webhook.Client{Config: hook, UserAgent: "qory-runner/" + spec.RunnerVersion}
 		ping := emit.Make(event.Ping, map[string]any{"runner_version": spec.RunnerVersion, "events": filter(hook)})
-		files.Write(ping)
+		sinks.Write(ping)
 		body, _ := ping.JSON()
 		if err := client.Ping(ctx, event.NewID(), []byte("["+string(body)+"]")); err != nil {
-			files.Close(ctx)
+			sinks.Close(ctx)
 			return nil, err
 		}
 		posts = sink.NewWebhook(client, dir, spec.Report)
@@ -147,8 +175,26 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		sinks.Write(emit.Make(typ, data))
 	}
 
+	// The wall comes before the proxy, because it says where the proxy must listen, and
+	// goes after everything else, because the proxy outlives the last connection.
+	var enclosure wall.Enclosure
+	bind := spec.ProxyBind
+	if spec.Wall != nil {
+		if enclosure, err = spec.Wall.Prepare(ctx, wall.Request{RunID: runID, Image: spec.Image}); err != nil {
+			sinks.Close(ctx)
+			return nil, err
+		}
+		defer func() {
+			// The run's context may be what ended the run; the wall is removed regardless.
+			if err := enclosure.Close(context.WithoutCancel(ctx)); err != nil {
+				spec.Report("removing the wall: " + err.Error())
+			}
+		}()
+		bind = enclosure.ProxyAddr()
+	}
+
 	allow := pol.Narrow(spec.Declared)
-	px, err := proxy.Listen(pol.Policy.Egress.Mode, allow, func(d proxy.Decision) {
+	px, err := proxy.Listen(bind, pol.Policy.Egress.Mode, allow, func(d proxy.Decision) {
 		decision := "denied"
 		if d.Allowed {
 			decision = "allowed"
@@ -160,6 +206,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		return nil, err
 	}
 	defer px.Close()
+	if spec.Wall != nil || spec.ProxyBind != "" {
+		// The proxy serves something that is not on this machine, so this machine's own
+		// addresses are not its to reach.
+		px.Guard(pol.Policy.Egress.Allow)
+	}
 
 	sock, err := socket.Listen()
 	if err != nil {
@@ -176,19 +227,44 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	defer closeSocket()
 
 	args := spec.Args
+	// The run directory goes in read-only, over whatever mount holds it: the settings
+	// are read from it, and the record in it is not the agent's to rewrite.
+	mounts := append(append([]wall.Mount(nil), spec.Mounts...), wall.Mount{Path: dir, ReadOnly: true})
 	if desc.Sources.Hooks != nil && len(spec.Forwarder) > 0 {
-		if args, err = installHooks(desc.Sources.Hooks, args, dir, spec.Forwarder); err != nil {
+		if args, _, err = installHooks(desc.Sources.Hooks, args, dir, spec.Forwarder); err != nil {
 			sinks.Close(ctx)
 			return nil, err
 		}
 	}
-	env := environment(spec.Env, px.Env(), []string{EnvSocket + "=" + sock.Path(), EnvRunID + "=" + runID})
+	// What is started: the runtime itself, or under a wall the adapter's command that
+	// starts it inside, which sets the proxy and socket variables by the addresses the
+	// enclosure reaches them on.
+	launch := wall.Launch{
+		Command: spec.Command, Args: args, Dir: spec.Dir,
+		Env: environment(spec.Env, px.Env(), []string{EnvSocket + "=" + sock.Path(), EnvRunID + "=" + runID}),
+	}
+	if enclosure != nil {
+		launch, err = enclosure.Wrap(ctx, wall.Launch{
+			Command: spec.Command, Args: args, Dir: spec.Dir, Interactive: spec.Interactive,
+			Env:   environment(spec.Env, []string{EnvRunID + "=" + runID}),
+			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts,
+		})
+		if err != nil {
+			sinks.Close(ctx)
+			return nil, err
+		}
+	}
 
 	start := time.Now()
-	write(event.RunStarted, map[string]any{
+	started := map[string]any{
 		"runtime": spec.Runtime, "runtime_version": desc.RuntimeVersion, "command": spec.Command, "args": args,
 		"dir": spec.Dir, "interactive": spec.Interactive, "runner_version": spec.RunnerVersion, "host": hostname(),
-	})
+	}
+	if spec.Wall != nil {
+		started["wall"] = spec.Wall.Name()
+		started["image"] = spec.Image
+	}
+	write(event.RunStarted, started)
 	applied := map[string]any{"mode": string(pol.Policy.Egress.Mode), "allow": allow, "source": pol.Source}
 	if pol.Source == "config" {
 		applied["digest"] = pol.Digest
@@ -205,7 +281,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if desc.Sources.Output == nil {
 		output = nil
 	}
-	proc := &process{command: spec.Command, args: args, env: env, dir: spec.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output}
+	proc := &process{command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output}
 	stop := heartbeat(ctx, spec.Heartbeat, start, write)
 	var exit exitStatus
 	if spec.Interactive {
@@ -248,7 +324,7 @@ func withDefaults(spec Spec) Spec {
 	if spec.RunsDir == "" {
 		spec.RunsDir = filepath.Join(spec.Dir, ".qory", "runs")
 	}
-	if spec.Env == nil {
+	if spec.Env == nil && spec.Wall == nil {
 		spec.Env = os.Environ()
 	}
 	if spec.Heartbeat == 0 {

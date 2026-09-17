@@ -6,13 +6,15 @@
 // an event. [Webhook] batches, signs and posts to a receiver without ever delaying the
 // session: writes go into a bounded queue, a worker delivers with retries, and what
 // the receiver does not accept by the time the run ends is spooled as batch files and
-// counted. [Multi] fans one write out to several sinks.
+// counted. [Writer] prints the same line events.jsonl gets to a stream the caller
+// owns, standard output say. [Multi] fans one write out to several sinks.
 package sink
 
 import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -95,6 +97,31 @@ func (f *File) Close(context.Context) error {
 	defer f.mu.Unlock()
 	return errors.Join(f.events.Sync(), f.events.Close(), f.output.Sync(), f.output.Close())
 }
+
+// Writer writes every event as one JSON line, the line events.jsonl holds, to a stream
+// it does not own: a run with no receiver is followed on standard output this way.
+type Writer struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+// NewWriter returns a sink writing to w. Close leaves w open.
+func NewWriter(w io.Writer) *Writer { return &Writer{w: w} }
+
+// Write writes the event as one line.
+func (s *Writer) Write(ev *event.Event) error {
+	line, err := ev.JSON()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err = s.w.Write(append(line, '\n'))
+	return err
+}
+
+// Close does nothing: the stream is the caller's.
+func (s *Writer) Close(context.Context) error { return nil }
 
 // Multi writes to every sink in order and closes them all.
 type Multi []Sink

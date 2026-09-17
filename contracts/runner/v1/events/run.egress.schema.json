@@ -12,6 +12,6 @@
     "method": {"description": "CONNECT for a tunnel, HTTP for a plain request through the proxy.", "type": "string", "enum": ["CONNECT", "HTTP"]},
     "decision": {"type": "string", "enum": ["allowed", "denied"]},
     "mode": {"description": "The policy mode the decision was made under.", "type": "string", "enum": ["observe", "enforce"]},
-    "rule": {"description": "The allow entry that matched the host, or empty when none did. In observe mode an empty rule is still allowed; in enforce mode it is denied.", "type": "string"}
+    "rule": {"description": "The allow entry that matched the host, or empty when none did. In observe mode an empty rule is still allowed; in enforce mode it is denied. Behind a wall, wall:own-address is the wall's own refusal, in either mode: the host is a link-local address, the metadata service say, or the runner's machine with no allow entry naming it.", "type": "string"}
   }
 }

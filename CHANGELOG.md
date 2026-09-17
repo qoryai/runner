@@ -4,6 +4,49 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [Unreleased]
+
+### Added
+
+- The wall, `wall.Wall`: an optional enclosure for the runtime whose only route out
+  leads to the session runner's proxy, so a program that ignores the proxy variables
+  reaches nothing instead of going unseen. The session runner stays outside with the
+  policy and the webhook's secret, and the enclosure sees the run directory read-only. `session.Spec` gains `Wall`, `Image` and `Mounts`;
+  under a wall a nil `Env` is nothing, not the process's own, and
+  `ai.qory.run.started` carries `wall` and `image`.
+- The Docker adapter, `wall.Docker`, through the `docker` command and no library: an
+  `--internal` network for the agent whose bridge holds no address of the host's, a relay container on that network and an ordinary
+  one, both containers as the caller's user with every capability dropped and no new
+  privileges, the workspace at its own path, the runner's settings read-only, the
+  environment through a file so no value is on a command line, and everything removed at
+  exit. The proxy binds the network's gateway on a Linux host and stays on loopback where
+  the engine is in a virtual machine.
+- The guard: behind a wall, or with `ProxyBind` set, the proxy refuses the link-local
+  range always, and the runner's own machine, loopback and every address it holds,
+  unless an allow entry names the host itself, in either mode. The way around the wall
+  is not through the proxy, and a local MCP server or model endpoint is reached through
+  it when the policy names it. A refused literal address or `localhost` is a denied
+  `ai.qory.run.egress` with the rule `wall:own-address`; a name that resolves to one is
+  refused when dialled.
+- `wall.Relay`, the one peer an enclosure reaches: it copies a fixed port to one address
+  fixed when it starts. The caller's binary runs it in a mode of its own and is mounted
+  into the enclosure as the relay and the hook forwarder, so the wall needs no image.
+- The conformance suite, `wall/walltest`: the contract's guarantees checked from inside
+  the enclosure with a real session behind the adapter. CI runs it against Docker on a
+  Linux machine, where a skip is a failure; golden files pin the adapter's command lines
+  everywhere else.
+- `session.Spec.ProxyBind`, the address the proxy listens on, for a caller that builds
+  an enclosure of its own; loopback stays the default.
+- `session.Spec.Events`, a stream that gets every event as the JSON line `events.jsonl`
+  holds: a run with no receiver is followed on standard output.
+- The contract gains §The wall: the guarantees, what crosses, the relay, the suite and
+  what ships; and under §Limits the three outcomes of a connection, the model credential
+  inside the enclosure, the proxy's address on a Linux host, and hooks on an engine in a
+  virtual machine.
+- `QORY_RUN_SOCKET` is read as an address: a path, or `unix:` and a path, is the local
+  socket, and another scheme is a transport the forwarder refuses by name, so a network
+  transport can be added without an old forwarder misreading it.
+
 ## [0.1.0] - 2026-09-16
 
 ### Added

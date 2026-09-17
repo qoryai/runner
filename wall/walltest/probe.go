@@ -1,0 +1,217 @@
+package walltest
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"golang.org/x/term"
+)
+
+// probePrefix starts the one line of standard output that holds the probe's report.
+const probePrefix = "walltest-probe: "
+
+// report is what the probe found inside the enclosure. An attempt that must fail
+// reports its error; empty means it succeeded.
+type report struct {
+	OutsideAddress string            `json:"outside_address"`
+	OutsideName    string            `json:"outside_name"`
+	Metadata       string            `json:"metadata"`
+	Allowed        int               `json:"allowed"`
+	AllowedErr     string            `json:"allowed_err"`
+	Denied         int               `json:"denied"`
+	DeniedErr      string            `json:"denied_err"`
+	OwnViaProxy    int               `json:"own_via_proxy"`
+	MetaViaProxy   int               `json:"metadata_via_proxy"`
+	HostByGateway  []string          `json:"host_by_gateway"`
+	RecordWrite    string            `json:"record_write"`
+	UID            int               `json:"uid"`
+	GID            int               `json:"gid"`
+	CapEff         string            `json:"cap_eff"`
+	CapPrm         string            `json:"cap_prm"`
+	CapBnd         string            `json:"cap_bnd"`
+	NoNewPrivs     string            `json:"no_new_privs"`
+	Sockets        []string          `json:"sockets"`
+	HostEnv        bool              `json:"host_env"`
+	PassedEnv      bool              `json:"passed_env"`
+	EnvNames       []string          `json:"env_names"`
+	HostFile       bool              `json:"host_file"`
+	SettingsWrite  string            `json:"settings_write"`
+	Namespaces     map[string]string `json:"namespaces"`
+	Hook           string            `json:"hook"`
+	Terminal       bool              `json:"terminal"`
+}
+
+// wait is how long an attempt that must fail is given to fail.
+const wait = 3 * time.Second
+
+// probe is the runtime of the suite's session: it tries what a wall forbids, uses what
+// a wall provides, calls its hook the way a runtime does, prints its report and exits
+// as told.
+func probe(args []string) int {
+	var r report
+	r.OutsideAddress = dial("1.1.1.1:443")
+	r.Metadata = dial("169.254.169.254:80")
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	if addrs, err := net.DefaultResolver.LookupHost(ctx, "example.com"); err != nil {
+		r.OutsideName = err.Error()
+	} else if len(addrs) == 0 {
+		r.OutsideName = "no addresses"
+	}
+	cancel()
+
+	r.Allowed, r.AllowedErr = get(os.Getenv("PROBE_ALLOWED"))
+	r.Denied, r.DeniedErr = get(os.Getenv("PROBE_DENIED"))
+	r.OwnViaProxy, _ = get(os.Getenv("PROBE_OWN"))
+	r.MetaViaProxy, _ = get("http://169.254.169.254/latest/meta-data/")
+	// The first address of each network the probe is on is where an engine puts its
+	// host, when it puts it anywhere.
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			n, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ip := n.IP.To4(); ip != nil && !ip.IsLoopback() {
+				first := ip.Mask(n.Mask)
+				first[3]++
+				if addr := net.JoinHostPort(first.String(), os.Getenv("PROBE_HOST_PORT")); dial(addr) == "" {
+					r.HostByGateway = append(r.HostByGateway, addr)
+				}
+			}
+		}
+	}
+
+	r.UID, r.GID = os.Getuid(), os.Getgid()
+	if f, err := os.Open("/proc/self/status"); err == nil {
+		s := bufio.NewScanner(f)
+		for s.Scan() {
+			name, value, _ := strings.Cut(s.Text(), ":")
+			value = strings.TrimSpace(value)
+			switch name {
+			case "CapEff":
+				r.CapEff = value
+			case "CapPrm":
+				r.CapPrm = value
+			case "CapBnd":
+				r.CapBnd = value
+			case "NoNewPrivs":
+				r.NoNewPrivs = value
+			}
+		}
+		f.Close()
+	}
+	for _, p := range []string{"/var/run/docker.sock", "/run/docker.sock", "/run/containerd/containerd.sock", "/run/podman/podman.sock", "/var/run/crio/crio.sock"} {
+		if _, err := os.Stat(p); err == nil {
+			r.Sockets = append(r.Sockets, p)
+		}
+	}
+	r.HostEnv = os.Getenv(hostOnly) != ""
+	r.PassedEnv = os.Getenv("PROBE_PASSED") == "yes"
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		r.EnvNames = append(r.EnvNames, name)
+	}
+	sort.Strings(r.EnvNames)
+	if _, err := os.Stat(os.Getenv("PROBE_HOST_FILE")); err == nil {
+		r.HostFile = true
+	}
+	r.Namespaces = map[string]string{}
+	for _, ns := range []string{"net", "pid", "mnt", "ipc", "uts"} {
+		r.Namespaces[ns], _ = os.Readlink("/proc/self/ns/" + ns)
+	}
+	if err := os.WriteFile("probe-was-here", []byte("inside"), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "probe: the workspace:", err)
+	}
+	r.Terminal = term.IsTerminal(int(os.Stdout.Fd()))
+
+	for i, a := range args {
+		if a == "--settings" && i+1 < len(args) {
+			if f, err := os.OpenFile(args[i+1], os.O_WRONLY, 0); err != nil {
+				r.SettingsWrite = err.Error()
+			} else {
+				f.Close()
+			}
+			if f, err := os.OpenFile(filepath.Join(filepath.Dir(args[i+1]), "events.jsonl"), os.O_WRONLY|os.O_APPEND, 0); err != nil {
+				r.RecordWrite = err.Error()
+			} else {
+				f.Close()
+			}
+			r.Hook = hook(args[i+1])
+		}
+	}
+
+	b, _ := json.Marshal(r)
+	fmt.Println(probePrefix + string(b))
+	code := 0
+	fmt.Sscan(os.Getenv("PROBE_EXIT"), &code)
+	return code
+}
+
+// dial reports the error of connecting, or nothing when the connection opened.
+func dial(addr string) string {
+	c, err := net.DialTimeout("tcp", addr, wait)
+	if err != nil {
+		return err.Error()
+	}
+	c.Close()
+	return ""
+}
+
+// get fetches u through the proxy the environment names, explicitly, because some of
+// what the probe asks for is on loopback, which NO_PROXY exempts.
+func get(u string) (int, string) {
+	proxyURL, err := url.Parse(os.Getenv("HTTP_PROXY"))
+	if err != nil || proxyURL.Host == "" {
+		return 0, "HTTP_PROXY is " + os.Getenv("HTTP_PROXY")
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}, Timeout: 10 * time.Second}
+	resp, err := client.Get(u)
+	if err != nil {
+		return 0, err.Error()
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode, ""
+}
+
+// hook calls the SessionEnd hooks the settings name, as the runtime would, and returns
+// what they printed.
+func hook(settings string) string {
+	b, err := os.ReadFile(settings)
+	if err != nil {
+		return err.Error()
+	}
+	var s struct {
+		Hooks map[string][]struct {
+			Hooks []struct{ Command string } `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err.Error()
+	}
+	var said strings.Builder
+	for _, group := range s.Hooks["SessionEnd"] {
+		for _, h := range group.Hooks {
+			cmd := exec.Command("sh", "-c", h.Command)
+			cmd.Stdin = strings.NewReader(`{"session_id":"probe","hook_event_name":"SessionEnd","reason":"other","cwd":"/"}`)
+			out, err := cmd.CombinedOutput()
+			said.Write(out)
+			if err != nil {
+				said.WriteString(err.Error())
+			}
+		}
+	}
+	return said.String()
+}
