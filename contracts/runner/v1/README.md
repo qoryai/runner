@@ -35,7 +35,8 @@ The runner's duties, in the order that matters when they conflict:
    credentials later. A policy that cannot be read means no run. No policy means observe
    everything and deny nothing. Nothing in a policy grants; a stale or failed policy
    degrades toward more restrictive, never toward more permissive.
-2. **Egress.** The runner owns a loopback HTTP proxy and starts the session behind it.
+2. **Egress.** The runner owns an HTTP proxy, on loopback or, behind a wall, on the one
+   address the enclosure reaches (§The wall), and starts the session behind it.
    Every connection the session opens through the proxy is observed and recorded as one
    event: the host, the port, whether it was a `CONNECT` tunnel or a plain request, the
    decision, and the rule that made it. In enforce mode a connection to a host outside
@@ -48,7 +49,9 @@ The runner's duties, in the order that matters when they conflict:
 4. **Liveness.** A heartbeat while the session runs; the exit as the result.
 5. **Reporting.** The session's terminal bytes as log chunks, the runner's observations
    as events, the runtime's own output mapped to session events by a descriptor. Every
-   event goes to files. When a webhook is configured, every event goes there too.
+   event goes to files. When a webhook is configured, every event goes there too. When
+   the caller gives a stream, standard output say, every event goes there as well, the
+   line `events.jsonl` holds; that is how a run with no receiver is followed.
 6. **The harness reports over a local socket**, never over a network. A hook the
    runtime calls forwards what it received to the runner's socket; the runner is the
    only thing that speaks to a receiver.
@@ -61,12 +64,37 @@ Stated so a receiver reads the record for what it is.
   `CONNECT` tunnel is a blind relay once established.
 - Only proxy-aware programs are seen. The agent CLIs, git over HTTPS, curl, the package
   managers and the language runtimes honour the proxy variables; SSH does not, and a
-  program that ignores the variables is not seen. Without a sandbox, enforce mode is
-  advisory against such a program. Enforcement against bypass belongs to the container
-  layer: under a node runner the session runner runs on the node and the agent in a
-  container whose only route out leads to the proxy, so a connection around the proxy
-  fails there rather than succeeding unseen. The runner records what came through it
-  and nothing else, on either machine.
+  program that ignores the variables is not seen. Without a wall, enforce mode is
+  advisory against such a program. Enforcement against bypass belongs to the wall (§The
+  wall): the session runner runs outside and the agent in an enclosure whose only route
+  out leads to the proxy. The three outcomes: a connection through the proxy is decided
+  by the policy and recorded, on any machine; a connection around the proxy succeeds
+  unseen without a wall, and fails unseen behind one. The runner records what came
+  through it and nothing else; a record of attempts a wall refused is the container
+  layer's own logging, or the network's.
+- A wall decides which process may talk, not where the machine may talk. A packet filter
+  in front of a node cannot tell the agent from the runner, so its list is the union of
+  both; the run's policy can only be held at the proxy. Neither tells two accounts apart
+  on one allowed host: a code host, an object store and a model endpoint each carry data
+  to whoever owns the account the request names.
+- Behind a wall the model credential is in the enclosure's environment, because the
+  runtime needs it and the run passes it. Keeping it outside, injected by the proxy, is
+  not in this version. What is handed in is the agent's: a checkout that keeps a token
+  in the repository's configuration hands the token in with the workspace. The run
+  directory is shown read-only, so the agent cannot change `events.jsonl`; when it lies
+  inside the workspace the agent can still rename the directory above it, which moves
+  the record and does not alter it. The webhook's copy is out of reach either way.
+- Behind a wall the exit status is the adapter's command's. With Docker that is the
+  runtime's status, except that `125` is the engine failing to start the container,
+  `126` and `127` the program not being startable in the image, and a runtime killed by
+  a signal arrives as `128` plus the signal's number, with no `signal` named.
+- The proxy behind a wall listens where the enclosure reaches it, which on a Linux host
+  is an address other containers of the same engine reach too. What they send is decided
+  by the run's policy and the guard, and lands in the run's record.
+- On an engine inside a virtual machine, a Mac's say, the hook socket does not cross the
+  file share, so a walled run there has no session events from hooks; the log, the
+  egress record and the structured output are unaffected. The forwarder's network
+  transport, through the relay, is not in this version.
 - The runtime's session events are what the runtime reports through its hooks and its
   structured output. A runtime that reports nothing produces no session events; the log
   and the egress record are the runner's own and are always there.
@@ -114,6 +142,14 @@ One run, on a developer machine, with a webhook configured:
    event is still read, emits `ai.qory.run.exited`, gives the sinks fifteen seconds to
    flush, reports what the webhook did not accept, and returns the program's exit
    status. A runtime killed by a signal exits as `-1` with the signal named.
+
+Behind a wall, three steps differ and no event does. Before step 5 the runner asks the
+wall to prepare the enclosure and listens where the enclosure says, not on loopback.
+After step 6 it hands the wall the launch, the proxy's address, the socket and the
+run directory, read-only, and starts the command the wall returns, on the same pseudo-terminal or
+pipes; the proxy and socket variables inside name the addresses the enclosure reaches
+them on. After step 9 it closes the wall, which removes everything it created.
+`ai.qory.run.started` carries `wall` and `image`.
 
 Under a node runner, step 1 is the node runner handing the same spec down through the
 environment, with the run id it already holds; everything after is one code path.
@@ -185,7 +221,7 @@ The types, one namespace. The runner's own:
 | Type | When | Data |
 |---|---|---|
 | `ai.qory.ping` | before the runtime starts, to the webhook only, when one is configured | `runner_version`, `events` |
-| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host` |
+| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, and behind a wall `wall`, `image` |
 | `ai.qory.run.policy_applied` | right after, once | `mode`, `allow`, `source`, `path`, `digest`, `declared` |
 | `ai.qory.run.log` | one per chunk of output: one line or 4096 bytes, whichever comes first | `stream`, `bytes` |
 | `ai.qory.run.egress` | one per connection through the proxy, allowed or denied | `host`, `port`, `method`, `decision`, `mode`, `rule` |
@@ -337,8 +373,10 @@ reports that version and does not check the installed one.
 
 ## The local socket
 
-`QORY_RUN_SOCKET` names a Unix domain socket the runner creates before the runtime
-starts, in a private directory of its own under the system's temporary directory, mode
+`QORY_RUN_SOCKET` is an address, not a path to open: a path, or `unix:` and a path, is
+the local socket, and any other scheme names a transport, which a forwarder that does
+not have it refuses by name. Only the local socket exists in this version. It is a Unix
+domain socket the runner creates before the runtime starts, in a private directory of its own under the system's temporary directory, mode
 `0700`, because a socket path has a short limit on some systems and a run directory in
 a deep checkout can exceed it. A client connects, writes one record per line in the shape
 of `record.schema.json`, and closes; the runner reads until end of file, one connection
@@ -347,6 +385,72 @@ is no answer and no framing beyond the newline. The forwarder the runner install
 hook is one such client; a harness that wants to report something of its own writes the
 same shape with `source: hooks`. Nothing on the socket reaches a receiver except through
 the descriptor's rules. The socket is removed when the run ends.
+
+## The wall
+
+A wall is what makes a connection around the proxy fail. It is optional: with none, the
+runtime is a process of the machine and enforcement is cooperative (§Limits). With one,
+the runtime runs in an **enclosure** and the session runner stays outside it with the
+proxy, the policy and the webhook's secret; the record is written from outside, and the
+enclosure sees the run directory read-only. A wall is built by an adapter,
+one per container interface; the contract names no tool in its rules and states one list
+for all of them.
+
+**What every wall guarantees:**
+
+- no route out of the enclosure except to the session runner's proxy;
+- a resolver that resolves nothing outside the enclosure;
+- no cloud metadata address, which is a network path to credentials;
+- no file of the host beyond the mounts the run lists, and no environment beyond what
+  the run passes;
+- a user that is not root, no added capabilities, no privileged mode, no host
+  namespaces;
+- never the container runtime's own socket: a process that can ask the daemon for a
+  container on the host's network has left the wall.
+
+The proxy is part of the list, because it dials from outside on behalf of what is
+inside: behind a wall it is **guarded**, and what is on the runner's machine is not
+reached by default. Two rules, in either mode, observe included:
+
+- The link-local range, where a cloud keeps its metadata service, is refused whatever
+  the allow list says.
+- The runner's own machine, loopback and every address it holds, is refused unless an
+  `egress.allow` entry of the policy names the host itself. A `*.` suffix over it does
+  not count, and neither does a name a harness declared under such a suffix: the
+  machine's owner names what is opened on the machine, a repository cannot. A
+  local MCP server or model endpoint is reached through the proxy like everything else,
+  decided and recorded, when the policy names it, and the rule that names it applies
+  under observe as well. The session names such a server by the machine's host name or
+  an alias of it, not by `localhost`, which `NO_PROXY` keeps inside the enclosure.
+
+A refusal the proxy can make without resolving, a literal address or `localhost`, is a
+`denied` `ai.qory.run.egress` with the rule `wall:own-address` and a `403`; a name that
+resolves to such an address passes the decision, is refused when dialled, and the
+runtime gets a `502`. Without the guard the way around a wall is through the proxy.
+
+**What crosses**, all three the session runner's, none carrying a credential of the
+runner's: the proxy, as a network address; the pseudo-terminal or the pipes, through the
+adapter's own command; the hook socket, as a mounted file where a file can cross.
+
+**The relay.** The agent reaches the proxy by a name, through a relay: a process of the
+runner's on the enclosure's network and on an ordinary one, listening on a fixed port and
+copying every byte to one address fixed when it starts, the proxy's. It reads nothing,
+decides nothing and takes no instruction from the agent; the policy stays in the session
+runner. It exists because the host is not always where a container thinks it is: with
+the engine in a virtual machine the network's gateway is the virtual machine's, not the
+host's.
+
+**One conformance suite**, the `wall/walltest` package, checks the list from inside the
+enclosure with a real session behind the adapter, and an adapter ships when the suite
+passes for it. The suite needs Linux and the tool, so it runs in the runner's CI on a
+Linux machine; the ordinary tests compare the commands an adapter generates with golden
+files and need neither.
+
+**What ships:** `docker`, through the `docker` command and no library, serving whatever
+engine that command reaches. It is supported where the suite passes. An engine in a
+virtual machine on a Mac is where a wall is developed, not a target: the suite passes
+there without the hook check (§Limits). The agent's image is the caller's; the wall
+builds none.
 
 ## Fixtures
 
@@ -386,6 +490,14 @@ Public sources this contract was written from, and nothing else:
   [uv](https://docs.astral.sh/uv/reference/environment/) and [cargo](https://doc.rust-lang.org/cargo/reference/config.html#httpproxy)
   configuration pages. Setting both cases and listing loopback in `NO_PROXY` is what the
   union of them requires.
+- The wall: Docker's [`network create --internal`](https://docs.docker.com/reference/cli/docker/network/create/),
+  which gives a network no route out; the [`docker run` reference](https://docs.docker.com/reference/cli/docker/container/run/)
+  for `--cap-drop`, `--security-opt no-new-privileges`, `--user`, `--env-file`, `--mount`
+  and `--add-host` with `host-gateway`; Docker's [note on the daemon socket](https://docs.docker.com/engine/security/#docker-daemon-attack-surface),
+  which is why the socket never crosses; the instance metadata service of
+  [AWS](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-options.html),
+  the address the list names; Kubernetes' [network policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/),
+  the picture the relay matches: one named peer and nothing else.
 - Claude Code 2.1.273: the [hooks reference](https://code.claude.com/docs/en/hooks) for
   the event names, the input on standard input and the rule that exit 0 with no output
   is no decision; the [CLI reference](https://code.claude.com/docs/en/cli-reference) and
