@@ -122,6 +122,129 @@ output with the lines `events.jsonl` holds.
 answers `2xx`; the contract's [webhook section](contracts/runner/v1/README.md#the-webhook)
 has the rules and `internal/receiver` is a worked example.
 
+## The node runner
+
+A node runner is a machine that runs agents for someone else: it takes work, starts each
+run behind a wall, and reports what happened. It is two halves, and one of them ships.
+
+| Half | What it does | State |
+|---|---|---|
+| **The wall** | starts the agent in a container with no route out except to the session runner's proxy; the policy, the record and the webhook's secret stay on the node | ships in 0.2.0, as `qory run --wall docker` |
+| **The fleet layer** | registers the node with a control plane, heartbeats, claims work, and gets the run's policy in the answer | not built; no command starts it, and nothing here describes it as if one did |
+
+So today a node is a machine with Docker on which `qory run --wall docker` is started,
+by a person, a CI job or a scheduler of your own. Reporting to a control plane already
+works without the fleet layer, because it is the same webhook every run has: the receiver
+creates the run from the first event it sees.
+
+### How it works
+
+```
+ the node                                              elsewhere
+┌─────────────────────────────────────────────────────┐
+│ qory run: the session runner, outside the wall      │
+│   policy ─▶ proxy ─▶ decides, records, dials ───────┼──▶ the hosts the policy allows
+│   events ─▶ .qory/runs/<id>/events.jsonl            │
+│          └▶ webhook, signed ────────────────────────┼──▶ a receiver: your control plane
+│      ▲ proxy      ▲ hooks       ▲ terminal          │
+│══════╪════════════╪═════════════╪════ the wall ═════│
+│  ┌───┴───┐   ┌────┴─────────────┴────────────────┐  │
+│  │ relay │◀──│ the agent's container: your image │  │
+│  └───────┘   │ no route · no resolver · not root │  │
+│              └───────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
+```
+
+The agent's container is on a network with no route out. The one peer it reaches is the
+relay, which copies a fixed port to the proxy and decides nothing. Every connection is
+therefore the proxy's to decide and record, and a program that ignores the proxy reaches
+nothing. The checkout and the composed home are mounted at their own paths, the run's
+record read-only; nothing else of the node is visible inside. What every wall guarantees
+is the contract's [wall section](contracts/runner/v1/README.md#the-wall), and the
+[conformance suite](wall/walltest/walltest.go) checks it from inside the container in
+this repository's CI.
+
+### Starting it
+
+You need the `docker` command with an engine behind it, [`qory`](https://github.com/qoryai/qory)
+0.7.0 or later, and an image of yours that holds the runtime and your toolchain; the
+wall builds none. A minimal one for Claude Code:
+
+```dockerfile
+FROM node:22-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/* && npm install -g @anthropic-ai/claude-code
+# The container runs as the node's user, who has no home in the image.
+ENV HOME=/tmp
+```
+
+```sh
+docker build -t agent:1 .
+cd your-checkout && qory harness compose
+export ANTHROPIC_API_KEY=...            # a key, or CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`
+qory run --wall docker --image agent:1 --env ANTHROPIC_API_KEY claude -- -p "Reply pong"
+```
+
+The run is recorded in `.qory/runs/<id>/` as without a wall, `ai.qory.run.started` names
+the wall and the image, and the exit status is the agent's. Two things differ by machine:
+
+- **On Linux** `qory` mounts itself into the container as the relay and the hook
+  forwarder, and the agent's hooks reach the runner.
+- **On a Mac** the container cannot run the Mac's binary: download the Linux archive of
+  the same `qory` release for your engine's architecture and name the binary as
+  `wall.helper`. The hook socket does not cross the engine's virtual machine, so a walled
+  run there has the log, the egress record and the structured output, and no hook events.
+
+### Configuring it
+
+One file on the node, `~/.config/qory/runner.yaml`, never in a repository, so a checkout
+cannot set what it runs under. With it, a bare `qory run` is walled:
+
+```yaml
+apiVersion: qory.dev/v1alpha1
+egress:                         # what the agent may reach; without it, everything, recorded
+  mode: enforce                 # or observe: record everything, deny nothing
+  allow: [api.anthropic.com, github.com, "*.githubusercontent.com"]
+webhook:                        # how the node reports; without it, files only
+  url: https://control-plane.example.com/qory/events
+  secret: sixteen-characters-at-least   # or QORY_WEBHOOK_SECRET in the environment
+wall:
+  adapter: docker
+  image: agent:1                # or --image
+  env: [ANTHROPIC_API_KEY]      # names; the values come from qory run's environment
+  user: "1000:1000"             # only where qory runs as root, which a wall refuses
+  helper: /opt/qory/qory-linux  # only where qory is not a Linux build
+  command: podman               # only for another command than docker
+```
+
+- **`egress`** is the policy. Hosts only: a name, or `*.` and a name for every host
+  below it. When the harness's modules declare the hosts they reach, the agent reaches
+  the declared hosts this list covers; the list is the ceiling.
+- **Behind a wall the proxy is guarded.** It never dials link-local addresses, the cloud
+  metadata service among them, and it dials the node itself only for a host this list
+  names, not for one under a `*.` entry. A model endpoint or MCP server on the node is
+  reached through the proxy by the node's host name, listed here; `localhost` inside the
+  container is the container.
+- **`webhook`** posts every event, signed, to a receiver. With it set the run does not
+  start unless the receiver answers a ping, so a run meant to be observed is not run
+  unobserved; `--local` runs with the files alone.
+- **`wall.env`** is the whole of the node's environment that goes in, by name. The model
+  credential is among it and is then the agent's; keeping it outside, injected by the
+  proxy, is not built.
+- `--wall none` runs once without the wall, `--wall docker --image ...` once with one on
+  a node that has no `wall` section.
+
+### What is not there yet
+
+- The fleet layer: register, heartbeat, claim, the policy in the run start answer.
+- Hook events on an engine inside a virtual machine, until the forwarder has a network
+  transport through the relay.
+- On a Linux node the proxy's address is reached by other containers of the same engine;
+  the policy and the guard bound what they can do with it.
+- Git inside the container when the checkout is a git worktree, whose repository data
+  lies outside the mounts.
+- Rules on URL paths. The proxy sees a host and a port, never inside a TLS connection.
+
 ## Layout
 
 | Path | What |
@@ -131,7 +254,7 @@ has the rules and `internal/receiver` is a worked example.
 | `session/` | the session runner: `session.Run` takes a launch spec, with the policy, the webhook and the wall as values, and returns the exit status; `session.Forward` is the hook forwarder behind it |
 | `wall/` | the wall: the adapter interface, the Docker adapter, and `wall.Relay`, the one peer an enclosure reaches. `wall/walltest` is the conformance suite every adapter passes before it ships |
 | `internal/` | what the layers share: `policy`, `proxy`, `event`, `sink`, `webhook`, `descriptor`, `socket`, `chunk`; and `receiver`, the receiving side of the webhook the tests run the sink against, a worked example of the contract's receiving rules |
-| `node/` | the node runner, not built yet: it will register, heartbeat, take a dispatched task, hold the run's credentials and start a session through `session`, behind a wall |
+| `node/` | the node runner's fleet layer, not built yet: it will register, heartbeat, take a dispatched task, hold the run's credentials and start a session through `session`, behind a wall ([§The node runner](#the-node-runner)) |
 
 `qory run` calls `session.Run` with the spec it builds from the composed home and the
 launch template, and `session.Forward` from the hook command it installs.
