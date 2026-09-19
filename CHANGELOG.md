@@ -30,6 +30,14 @@ release may change what an existing document does, and says so under Upgrading.
 - `wall.Reaper`, and `Docker.Reap`: removes the containers and networks that carry a
   run's label, what a runner that died left behind. `Resend` asks for it.
 
+### Requirements
+
+- The Docker adapter needs a Linux engine that knows the bridge option
+  `com.docker.network.bridge.inhibit_ipv4` and the `host-gateway` address: Docker Engine
+  24.0 has both, and the conformance suite is run against Docker Engine 29 in CI and on
+  OrbStack. cgroup v2 is what `--pids-limit` and `--memory` are read through inside. No
+  kernel feature beyond what such an engine needs is used.
+
 ### Changed
 
 - Behind a wall the proxy serves the run's relay alone. Its address was reached by
