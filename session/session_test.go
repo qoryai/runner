@@ -517,6 +517,29 @@ func TestStopGraceIsHowLongTheRuntimeHasToLeave(t *testing.T) {
 	}
 }
 
+func TestStopSignalIsTheOneTheRunNames(t *testing.T) {
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "trap 'exit 7' INT; trap '' TERM; sleep 30 & wait"}
+	sp.Timeout = 300 * time.Millisecond
+	sp.StopSignal = "SIGINT"
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.TimedOut || res.ExitCode != 7 || res.Signal != "" {
+		t.Errorf("a runtime that leaves on SIGINT alone: result %+v", res)
+	}
+	for _, name := range []string{"SIGKILL", "INT", "sigint", "9"} {
+		sp := spec(t, nil)
+		sp.StopSignal = name
+		if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "stop signal") {
+			t.Errorf("stop signal %q: %v", name, err)
+		}
+	}
+}
+
 // TestResendCompletesAndDeliversTheRecordOfARunThatIsOver pins what a job's last step
 // relies on: what the receiver did not get is sent, once; a record its runner left
 // unfinished is closed with the reason; and a run that still goes is left alone.

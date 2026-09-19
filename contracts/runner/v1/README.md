@@ -158,9 +158,17 @@ One run, on a developer machine, with a webhook configured:
    status. A runtime killed by a signal exits as `-1` with the signal named.
 
 A run may have a time limit. When the runtime still runs at the limit the runner stops
-it, SIGTERM and SIGKILL after a grace the run names, ten seconds unless it does, and `ai.qory.run.exited` carries `reason:
-timeout` with the state `failed`; step 9 is otherwise the same. A denied connection
+it, and `ai.qory.run.exited` carries `reason: timeout` with the state `failed`; step 9
+is otherwise the same. A denied connection
 never ends a run; the limit is the one thing of the runner's that does.
+
+The runner stops a runtime the same way at the limit and when its own context ends: a
+signal that asks the runtime to leave, then SIGKILL after a grace. Both are the run's to
+name, SIGTERM and ten seconds unless it does. The signal is one of SIGTERM, SIGINT,
+SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2, since runtimes differ in what each means: one
+closes its session on SIGINT and drops it on SIGTERM, another the other way round, and a
+runner that knew which would know a runtime. Behind a wall the enclosure passes the same
+signal on to the runtime inside.
 
 The run id is the runner's own, a UUID version 7, unless the caller already holds one: a
 caller's id is a UUID in the canonical lower-case form, since it is every event's
@@ -373,6 +381,12 @@ subagent's `agent_type`. The descriptor copies it as `background_tasks` onto
 first list the task is missing from. Claude Code reports no exit status and no duration
 for a background task, so the record has neither; a descriptor copies what a runtime
 says and computes nothing, and the runtime's own output stream is where more is found.
+What becomes of work in the background when a run ends is the runtime's as well: it may
+end such work itself soon after its last answer, wait for it up to a ceiling of its own,
+and read that ceiling from a variable. The runner adds no rule of its own here. Behind a
+wall only the variables a run names go in, so such a variable is named like any other;
+and the run's stop signal and grace are what the runtime has to close such work when the
+runner stops it.
 
 Every session event that comes from a hook may carry `agent_id` and `agent_type` when
 it happened inside a subagent; `ai.qory.session.result`, read from the runtime's output,

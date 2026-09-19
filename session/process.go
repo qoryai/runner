@@ -31,7 +31,9 @@ type process struct {
 	stderr  io.Writer
 	// logs returns the chunk consumer for a stream.
 	logs func(stream string) func([]byte)
-	// grace is how long the process gets after SIGTERM before SIGKILL.
+	// stop is the signal that asks the process to leave, and grace how long it gets
+	// after it before SIGKILL.
+	stop  syscall.Signal
 	grace time.Duration
 	// output takes each JSON object the runtime prints as a line; nil when the
 	// runtime has no output source.
@@ -44,17 +46,44 @@ type exitStatus struct {
 	signal string
 }
 
-// DefaultStopGrace is how long the runtime gets after SIGTERM before SIGKILL, when the
-// context ends or the limit is reached, unless the spec names another.
+// DefaultStopGrace is how long the runtime gets after the stop signal before SIGKILL,
+// when the context ends or the limit is reached, unless the spec names another.
 const DefaultStopGrace = 10 * time.Second
 
-// newCmd builds the command with the context ending it: SIGTERM, then SIGKILL after
-// the grace.
+// DefaultStopSignal is the signal that asks the runtime to leave, unless the spec names
+// another.
+const DefaultStopSignal = "SIGTERM"
+
+// stopSignals are the signals a spec may name: the ones a program is written to leave
+// on. SIGKILL is not one, it is what follows the grace.
+var stopSignals = map[string]syscall.Signal{
+	"SIGTERM": syscall.SIGTERM,
+	"SIGINT":  syscall.SIGINT,
+	"SIGHUP":  syscall.SIGHUP,
+	"SIGQUIT": syscall.SIGQUIT,
+	"SIGUSR1": syscall.SIGUSR1,
+	"SIGUSR2": syscall.SIGUSR2,
+}
+
+// CheckStopSignal reports whether a spec may name the signal: SIGTERM, SIGINT, SIGHUP,
+// SIGQUIT, SIGUSR1 or SIGUSR2, written that way. Empty is the default and passes.
+func CheckStopSignal(name string) error {
+	if name == "" {
+		return nil
+	}
+	if _, ok := stopSignals[name]; !ok {
+		return fmt.Errorf("the stop signal %q is not one of SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2", name)
+	}
+	return nil
+}
+
+// newCmd builds the command with the context ending it: the stop signal, then SIGKILL
+// after the grace.
 func (p *process) newCmd(ctx context.Context) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, p.command, p.args...)
 	cmd.Env = p.env
 	cmd.Dir = p.dir
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.Cancel = func() error { return cmd.Process.Signal(p.stop) }
 	cmd.WaitDelay = p.grace
 	return cmd
 }
@@ -176,6 +205,12 @@ func signalName(s syscall.Signal) string {
 		return "INT"
 	case syscall.SIGHUP:
 		return "HUP"
+	case syscall.SIGQUIT:
+		return "QUIT"
+	case syscall.SIGUSR1:
+		return "USR1"
+	case syscall.SIGUSR2:
+		return "USR2"
 	}
 	return fmt.Sprintf("%d", int(s))
 }

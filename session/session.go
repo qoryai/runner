@@ -100,9 +100,13 @@ type Spec struct {
 	// runtime is stopped the way the context ending stops it, and run.exited carries
 	// the reason.
 	Timeout time.Duration
-	// StopGrace is how long the runtime gets between SIGTERM and SIGKILL when the runner
-	// stops it, at the Timeout or the context's end: the time a session needs to close
-	// what it has open. Zero means DefaultStopGrace.
+	// StopSignal is the signal that asks the runtime to leave when the runner stops it,
+	// at the Timeout or the context's end: one CheckStopSignal passes. A runtime may
+	// close a session on one signal and drop it on another, and which is the runtime's
+	// to say, not the runner's. Empty means DefaultStopSignal.
+	StopSignal string
+	// StopGrace is how long the runtime gets between the stop signal and SIGKILL: the
+	// time a session needs to close what it has open. Zero means DefaultStopGrace.
 	StopGrace time.Duration
 	// Limits are the resources the enclosure gives the runtime. Without a Wall they mean
 	// nothing.
@@ -213,6 +217,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	if spec.Timeout < 0 || spec.StopGrace < 0 {
 		return nil, errors.New("the timeout or the stop grace is negative")
+	}
+	if err := CheckStopSignal(spec.StopSignal); err != nil {
+		return nil, err
 	}
 	if err := CheckLabels(spec.Labels); err != nil {
 		return nil, err
@@ -434,7 +441,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if desc.Sources.Output == nil {
 		output = nil
 	}
-	proc := &process{grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output}
+	proc := &process{stop: stopSignals[spec.StopSignal], grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output}
 	stop := heartbeat(ctx, spec.Heartbeat, start, write)
 	// The limit ends the runtime and nothing else: the sinks and the wall are closed on
 	// the caller's context, as after any exit.
@@ -492,6 +499,9 @@ func withDefaults(spec Spec) Spec {
 	}
 	if spec.Env == nil && spec.Wall == nil {
 		spec.Env = os.Environ()
+	}
+	if spec.StopSignal == "" {
+		spec.StopSignal = DefaultStopSignal
 	}
 	if spec.StopGrace == 0 {
 		spec.StopGrace = DefaultStopGrace

@@ -10,8 +10,12 @@ release may change what an existing document does, and says so under Upgrading.
 
 - `session.Spec.Timeout`: a time limit for the runtime. At the limit it is stopped as
   the context ending stops it, `ai.qory.run.exited` carries `reason: timeout`, and
-  `Result.TimedOut` is set. `Spec.StopGrace` is the time between SIGTERM and SIGKILL
-  whenever the runner stops the runtime, ten seconds unless named.
+  `Result.TimedOut` is set.
+- `session.Spec.StopSignal` and `Spec.StopGrace`: how the runner stops a runtime, at the
+  limit or when its context ends. The signal is one of SIGTERM, SIGINT, SIGHUP, SIGQUIT,
+  SIGUSR1 and SIGUSR2, SIGTERM unless named, since a runtime may close its session on one
+  and drop it on another; the grace is the time until SIGKILL, ten seconds unless named.
+  `session.CheckStopSignal` is the check.
 - `session.Spec.Labels`: the caller's own names for the run, reported as `labels` in
   `ai.qory.run.started` and nowhere else. At most 16, keys of `a-z`, `0-9`, `_`, `.`
   and `-`, values of at most 256 bytes.
