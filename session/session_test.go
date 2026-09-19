@@ -333,6 +333,10 @@ func TestWebhookPingsFailsClosedAndDelivers(t *testing.T) {
 	if store.Count() != len(evs) || res.Undelivered != 0 {
 		t.Errorf("store holds %d of %d events, %d undelivered", store.Count(), len(evs), res.Undelivered)
 	}
+	// Everything was accepted during the run, the ping too, so nothing is owed after it.
+	if again, err := session.Resend(context.Background(), session.ResendSpec{Dir: res.Dir, Webhook: cfg}); err != nil || again.Sent != 0 || again.Closed || store.Count() != len(evs) {
+		t.Errorf("resend after a delivered run: %+v, %v", again, err)
+	}
 
 	refuse = true
 	sp = spec(t, nil)
@@ -511,4 +515,89 @@ func TestStopGraceIsHowLongTheRuntimeHasToLeave(t *testing.T) {
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("a runtime that ignores SIGTERM ran %s, past the grace", took)
 	}
+}
+
+// TestResendCompletesAndDeliversTheRecordOfARunThatIsOver pins what a job's last step
+// relies on: what the receiver did not get is sent, once; a record its runner left
+// unfinished is closed with the reason; and a run that still goes is left alone.
+func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
+	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	srv := httptest.NewServer(&receiver.Handler{Secret: "fixture-secret-not-a-real-one", Store: store})
+	defer srv.Close()
+	cfg := &session.Webhook{Version: 1, URL: srv.URL + "/events", Secret: "fixture-secret-not-a-real-one"}
+
+	// A run nobody received, as one whose receiver was away.
+	sp := spec(t, nil)
+	sp.Local = true
+	res, err := runWithSettingsEnv(t, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := len(events(t, res))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	sent, err := session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Webhook: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.Sent != all || sent.Undelivered != 0 || sent.Closed || store.Count() != all {
+		t.Errorf("first resend %+v, store holds %d of %d", sent, store.Count(), all)
+	}
+	if again, err := session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Webhook: cfg}); err != nil || again.Sent != 0 || store.Count() != all {
+		t.Errorf("second resend %+v, %v, store holds %d", again, err, store.Count())
+	}
+
+	// A record its runner died over: no run.exited, and half a line at the end.
+	sp = spec(t, nil)
+	sp.Local = true
+	if res, err = runWithSettingsEnv(t, sp); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(res.Dir, "events.jsonl")
+	b, _ := os.ReadFile(file)
+	lines := strings.SplitAfter(strings.TrimSuffix(string(b), "\n"), "\n")
+	cut := strings.Join(lines[:len(lines)-1], "") + `{"specversion":"1.0","id":"half`
+	if err := os.WriteFile(file, []byte(cut), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := store.Count()
+	sent, err = session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Webhook: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, res)
+	last := evs[len(evs)-1]
+	if !sent.Closed || last["type"] != "ai.qory.run.exited" || data(last)["reason"] != "runner_lost" || data(last)["state"] != "failed" {
+		t.Errorf("the record was not closed: %+v, last event %v", sent, last)
+	}
+	if len(evs) != len(lines) || store.Count()-before != len(evs) {
+		t.Errorf("%d events in the file, want %d; the store got %d", len(evs), len(lines), store.Count()-before)
+	}
+
+	// A run that still goes.
+	sp = spec(t, nil)
+	sp.Forwarder = nil
+	sp.Local = true
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "sleep 30"}
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	runCtx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); session.Run(runCtx, sp) }()
+	dir := filepath.Join(sp.Dir, ".qory", "runs", sp.RunID)
+	for range 100 {
+		if _, err := os.Stat(filepath.Join(dir, "lock")); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := session.Resend(ctx, session.ResendSpec{Dir: dir, Webhook: cfg}); !errors.Is(err, session.ErrRunning) {
+		t.Errorf("resend of a run that still goes: %v", err)
+	}
+	stop()
+	<-done
 }

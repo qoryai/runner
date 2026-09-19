@@ -21,6 +21,15 @@ release may change what an existing document does, and says so under Upgrading.
 - `session.ReadPolicy` and `Policy.Under`: a command reads a run's own policy file and
   puts it under the machine's, which it can only narrow.
 
+- `session.Resend`: completes and delivers the record of a run that is over, for a
+  job's last step after a runner that died or a receiver that was away. The run
+  directory gains `delivered.log`, a line per accepted batch written as the answer
+  comes, and `lock`, held while the runner lives; a run that still goes is
+  `ErrRunning`. A record with no `ai.qory.run.exited` gets one with `reason:
+  runner_lost`, and the events no accepted batch named are posted in order.
+- `wall.Reaper`, and `Docker.Reap`: removes the containers and networks that carry a
+  run's label, what a runner that died left behind. `Resend` asks for it.
+
 ### Changed
 
 - A `Spec.RunID` that is not a UUID in the canonical lower-case form is refused. It

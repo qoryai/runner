@@ -216,6 +216,12 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	unlock, err := lock(dir)
+	if err != nil {
+		files.Close(ctx)
+		return nil, err
+	}
+	defer unlock()
 	sinks := sink.Multi{files}
 	if spec.Events != nil {
 		sinks = append(sinks, sink.NewWriter(spec.Events))
@@ -226,11 +232,13 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		ping := emit.Make(event.Ping, map[string]any{"runner_version": spec.RunnerVersion, "events": filter(hook)})
 		sinks.Write(ping)
 		body, _ := ping.JSON()
-		if err := client.Ping(ctx, event.NewID(), []byte("["+string(body)+"]")); err != nil {
+		pingID := event.NewID()
+		if err := client.Ping(ctx, pingID, []byte("["+string(body)+"]")); err != nil {
 			sinks.Close(ctx)
 			return nil, err
 		}
 		posts = sink.NewWebhook(client, dir, spec.Report)
+		posts.Accepted(pingID, ping.Sequence)
 		sinks = append(sinks, posts)
 	}
 	// write numbers and writes under one lock, so the order in the sinks is the order of

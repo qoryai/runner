@@ -452,6 +452,41 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// Reap removes the containers and the networks that carry the run's label: what a
+// runner that died left behind. The containers go first, since a network in use stays.
+func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
+	if !runIDShape.MatchString(runID) {
+		return 0, fmt.Errorf("wall docker: the run id %q cannot name a container", runID)
+	}
+	sys := d.sys
+	if sys == nil {
+		sys = hostSystem{}
+	}
+	e := &dockerEnclosure{d: d, sys: sys, req: Request{RunID: runID}}
+	ctx, cancel := context.WithTimeout(ctx, closeWait)
+	defer cancel()
+	removed := 0
+	var errs []error
+	for _, kind := range []struct{ list, remove []string }{
+		{[]string{"ps", "--all", "--quiet"}, []string{"rm", "--force", "--volumes"}},
+		{[]string{"network", "ls", "--quiet"}, []string{"network", "rm"}},
+	} {
+		out, err := e.docker(ctx, append(kind.list, "--filter", "label="+e.label())...)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for _, id := range strings.Fields(string(out)) {
+			if _, err := e.docker(ctx, append(append([]string{}, kind.remove...), id)...); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			removed++
+		}
+	}
+	return removed, errors.Join(errs...)
+}
+
 // hostSystem is the machine itself.
 type hostSystem struct{}
 

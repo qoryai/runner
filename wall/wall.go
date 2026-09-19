@@ -25,6 +25,14 @@ type Wall interface {
 	Prepare(ctx context.Context, req Request) (Enclosure, error)
 }
 
+// Reaper is a wall that can remove what it left of a run whose runner died before it
+// closed the enclosure. It is asked only for a run known to be over.
+type Reaper interface {
+	// Reap removes everything the wall created for the run and reports how many
+	// things that was. Nothing left is not an error.
+	Reap(ctx context.Context, runID string) (int, error)
+}
+
 // Request is what a wall is told about the run it encloses.
 type Request struct {
 	// RunID names what the wall creates, so two runs never share anything.

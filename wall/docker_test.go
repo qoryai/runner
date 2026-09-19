@@ -273,3 +273,21 @@ func TestDockerLimitsTheAgentAndRefusesASocket(t *testing.T) {
 		t.Error("the engine's socket was mounted")
 	}
 }
+
+// TestDockerReapsWhatARunLeft pins that a reap asks by the run's label and removes the
+// containers before the networks.
+func TestDockerReapsWhatARunLeft(t *testing.T) {
+	rec := &recorder{t: t, uid: 1000}
+	d := &Docker{sys: rec}
+	if _, err := d.Reap(context.Background(), "-x"); err == nil {
+		t.Error("a flag was taken as a run id")
+	}
+	if _, err := d.Reap(context.Background(), runID); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(rec.lines, "\n")
+	ps, ls := strings.Index(got, "ps --all --quiet --filter label=ai.qory.run="+runID), strings.Index(got, "network ls --quiet --filter label=ai.qory.run="+runID)
+	if ps < 0 || ls < ps {
+		t.Errorf("the reap asked:\n%s", got)
+	}
+}

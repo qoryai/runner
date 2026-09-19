@@ -337,6 +337,22 @@ error. The file sink has every event regardless. The webhook never delays the se
 posting is asynchronous behind a bounded queue, and a queue that fills spools to the
 same directory rather than blocking the runtime.
 
+**After a runner that died.** The run directory says what the receiver is still owed
+without the runner that wrote it. `events.jsonl` is written as events happen.
+`delivered.log` beside it gets a line as each batch is accepted, the delivery id and the
+sequence of every event in it, and the one word `stopped` for a 410. `lock` is held by
+the runner for as long as it lives, by the kernel, so it is free once the runner is gone
+however it went. Sending a run again is the job's last step, whatever happened before
+it: refused while the lock is held; then what the run's wall left behind is removed, by
+the run's label; a record with no `ai.qory.run.exited` gets one, numbered on from the
+last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`; and every
+event the webhook's filter wants that no accepted batch named is posted, in order, in
+batches cut the same way, until accepted or given up on. What is still not accepted is
+under `undelivered/` again. A receiver sees some events twice when the runner died
+between an answer and its line, and discards them by `id` as ever. Nothing of this
+recovers a machine that died: the record went with it, and a receiver learns of that
+from heartbeats that stop.
+
 No timestamp is signed and no replay window is checked: a replayed batch is a duplicate
 the receiver already discards by event id, and the secret is the only credential.
 Stripe's signed timestamp and the Standard Webhooks headers were considered and set
