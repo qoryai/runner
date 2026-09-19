@@ -4,7 +4,21 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
-## [Unreleased]
+## [0.3.0] - 2026-09-19
+
+### Upgrading
+
+- A caller in Go resolves the runtime before the run: `session.Spec.Runtime` is a
+  `runtimes.Runtime`, not a name, and `Spec.Descriptors` is gone. Where a spec had
+  `Runtime: "claude"` and `Descriptors: dir`, call `catalog.Lookup("claude", dir)` from
+  `github.com/qoryai/runner/runtimes/catalog` and give the spec what it returns. A name
+  nothing describes was an error and is now a bare runtime, run and recorded with no
+  session events.
+- A receiver that requires `runtime_version` in `ai.qory.run.started` no longer finds it
+  for a bare runtime; for a described one it is there as before.
+- Nothing else changes for a run that uses none of what this release adds: a run whose
+  policy selects no credential and has no path rule makes no authority and terminates no
+  TLS, and the events it produces only gained optional fields.
 
 ### Added
 
@@ -187,5 +201,6 @@ release may change what an existing document does, and says so under Upgrading.
   It names the policy's `egress.allow` grammar as the one definition of a declared host,
   which the harness contract copies.
 
-[Unreleased]: https://github.com/qoryai/runner/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/qoryai/runner/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/qoryai/runner/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/qoryai/runner/compare/v0.1.0...v0.2.0

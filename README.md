@@ -141,7 +141,7 @@ run behind a wall, and reports what happened. It is two halves, and one of them 
 
 | Half | What it does | State |
 |---|---|---|
-| **The wall** | starts the agent in a container with no route out except to the session runner's proxy; the policy, the record and the webhook's secret stay on the node | ships in 0.2.0, as `qory run --wall docker` |
+| **The wall** | starts the agent in a container with no route out except to the session runner's proxy; the policy, the record and the webhook's secret stay on the node | ships since 0.2.0, as `qory run --wall docker`; since 0.3.0 it holds a run's credentials outside the container and holds a host to paths |
 | **The fleet layer** | registers the node with a control plane, heartbeats, claims work, and gets the run's policy in the answer | not built; no command starts it, and nothing here describes it as if one did |
 
 So today a node is a machine with Docker on which `qory run --wall docker` is started,
