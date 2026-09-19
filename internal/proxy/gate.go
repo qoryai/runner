@@ -37,6 +37,7 @@ type gate struct {
 	p *Proxy
 }
 
+// Accept hands on the next connection, gated when a token is required.
 func (g *gate) Accept() (net.Conn, error) {
 	c, err := g.Listener.Accept()
 	if err != nil {
@@ -58,6 +59,7 @@ type gated struct {
 	err     error
 }
 
+// Read checks the preamble before the first byte it hands on.
 func (c *gated) Read(b []byte) (int, error) {
 	c.once.Do(func() {
 		got := make([]byte, len(c.want))
