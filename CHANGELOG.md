@@ -32,11 +32,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Requirements
 
-- The Docker adapter needs a Linux engine that knows the bridge option
-  `com.docker.network.bridge.inhibit_ipv4` and the `host-gateway` address: Docker Engine
-  24.0 has both, and the conformance suite is run against Docker Engine 28 on Linux in
-  CI and 29 on OrbStack. cgroup v2 is what `--pids-limit` and `--memory` are read through inside. No
-  kernel feature beyond what such an engine needs is used.
+- The Docker adapter is tested on Linux with Docker Engine 28, in CI, and with Docker
+  Engine 29 on OrbStack; the conformance suite passes on both. It may work on an earlier
+  engine, and that is not tested. It depends on the bridge option
+  `com.docker.network.bridge.inhibit_ipv4`, which is in the engine's source at 24.0 and
+  was not looked for before it, and on the `host-gateway` address. On an engine nobody
+  has tried, run the suite: `go test ./wall/walltest` with `QORY_WALL_HELPER` naming its
+  Linux build.
 
 ### Changed
 
