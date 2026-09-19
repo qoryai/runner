@@ -87,6 +87,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Changed
 
+- **Breaking for a caller in Go.** `session.Spec.Runtime` is a `runtimes.Runtime`, not a
+  name, and `Spec.Descriptors` is gone: `catalog.Lookup(name, dir)` gives the runtime a
+  name and a descriptor directory gave before. A nil `Runtime` is a bare one named after
+  the command. A name nothing describes was an error and is now a bare runtime, and
+  `runtime_version` in `ai.qory.run.started` is absent for one.
 - The contract's limit that the proxy never reads a TLS connection now has its one
   exception, stated in every run's record: a terminated host. A run whose policy selects
   no credential and has no path rule is as before, with no authority made at all.
