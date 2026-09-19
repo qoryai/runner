@@ -88,9 +88,12 @@ Stated so a receiver reads the record for what it is.
   runtime's status, except that `125` is the engine failing to start the container,
   `126` and `127` the program not being startable in the image, and a runtime killed by
   a signal arrives as `128` plus the signal's number, with no `signal` named.
-- The proxy behind a wall listens where the enclosure reaches it, which on a Linux host
-  is an address other containers of the same engine reach too. What they send is decided
-  by the run's policy and the guard, and lands in the run's record.
+- The proxy behind a wall listens where the enclosure reaches it, which other
+  containers of the same engine, or other processes of the machine, reach too. It
+  serves none of them: the run has a token only its relay is given, every connection
+  the relay forwards opens with `QORY-RELAY`, a space, the token and a newline before
+  the first byte of HTTP, and a connection that opens otherwise is closed unanswered
+  and reported once. The token is never inside the enclosure.
 - On an engine inside a virtual machine, a Mac's say, the hook socket does not cross the
   file share, so a walled run there has no session events from hooks; the log, the
   egress record and the structured output are unaffected. The forwarder's network

@@ -245,7 +245,15 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if l.Socket != "" {
 		env = append(env, socket.Env+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
 	}
-	envFile, err := e.envFile(env)
+	envFile, err := e.envFile("env", env)
+	if err != nil {
+		return Launch{}, err
+	}
+	var relayEnv []string
+	if l.ProxyToken != "" {
+		relayEnv = []string{RelayTokenEnv + "=" + l.ProxyToken}
+	}
+	relayEnvFile, err := e.envFile("relay-env", relayEnv)
 	if err != nil {
 		return Launch{}, err
 	}
@@ -255,7 +263,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		create = append(create, "--add-host", hostName+":host-gateway")
 	}
 	create = append(create, e.hardening()...)
-	create = append(create, "--read-only", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
+	create = append(create, "--env-file", relayEnvFile, "--read-only", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
 	create = append(create, e.d.RelayArgs...)
 	create = append(create, fmt.Sprintf("%d=%s", relayPort, net.JoinHostPort(e.host, port)))
 	pull, cancel := context.WithTimeout(ctx, relayWait)
@@ -377,7 +385,7 @@ func mount(src, dst string, readonly bool) (string, error) {
 // envFile writes the enclosure's environment where only this user reads it. The file's
 // format is a line per variable with no quoting, so a value holding a newline cannot be
 // passed.
-func (e *dockerEnclosure) envFile(env []string) (string, error) {
+func (e *dockerEnclosure) envFile(name string, env []string) (string, error) {
 	var b strings.Builder
 	for _, kv := range env {
 		// A bare name in the file means the value of the docker command's own variable,
@@ -399,7 +407,7 @@ func (e *dockerEnclosure) envFile(env []string) (string, error) {
 		}
 		e.temp = dir
 	}
-	file := filepath.Join(e.temp, "env")
+	file := filepath.Join(e.temp, name)
 	return file, os.WriteFile(file, []byte(b.String()), 0o600)
 }
 

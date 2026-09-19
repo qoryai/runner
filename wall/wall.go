@@ -73,6 +73,10 @@ type Launch struct {
 	Interactive bool
 	// Proxy is the address the proxy listens on, host:port with the port it got.
 	Proxy string
+	// ProxyToken is what the proxy requires every connection to open with, when it is
+	// not empty. An adapter gives it to its relay and to nothing inside the enclosure,
+	// so the proxy serves this run's relay alone, whoever else reaches its address.
+	ProxyToken string
 	// Socket is the path of the hook socket on the host, empty when there is none.
 	Socket string
 	// Mounts are the files and directories of the host the run lists beside Dir: the

@@ -15,15 +15,27 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // recorder is a machine with no Docker: it records every command and answers the two
 // the adapter reads.
 type recorder struct {
-	t       *testing.T
-	gateway string
-	local_  bool
-	uid     int
-	lines   []string
-	fail    string
+	relayEnv string
+	t        *testing.T
+	gateway  string
+	local_   bool
+	uid      int
+	lines    []string
+	fail     string
 }
 
 func (r *recorder) run(_ context.Context, argv []string) ([]byte, error) {
+	argv = append([]string{}, argv...)
+	for i, a := range argv {
+		// The relay's environment file is in a directory of the test's; its content is
+		// what matters, and it is kept for the test to read.
+		if a == "--env-file" {
+			if b, err := os.ReadFile(argv[i+1]); err == nil {
+				r.relayEnv = string(b)
+			}
+			argv[i+1] = "RELAYENVFILE"
+		}
+	}
 	line := words(argv)
 	r.lines = append(r.lines, line)
 	switch {
@@ -50,7 +62,7 @@ func launch() Launch {
 	return Launch{
 		Command: "claude", Args: []string{"--settings", "/work/.qory/runs/" + runID + "/settings.json", "-p", "say hi"},
 		Env: []string{"ANTHROPIC_API_KEY=not-a-real-key", "QORY_RUN_ID=" + runID}, Dir: "/work",
-		Proxy: "127.0.0.1:50123", Socket: "/tmp/qory-run-1/sock", Mounts: []Mount{{Path: "/work"}, {Path: "/home/dev/.qory/homes/work", ReadOnly: true}, {Path: "/work/.qory/runs/" + runID, ReadOnly: true}},
+		Proxy: "127.0.0.1:50123", ProxyToken: "not-a-real-token", Socket: "/tmp/qory-run-1/sock", Mounts: []Mount{{Path: "/work"}, {Path: "/home/dev/.qory/homes/work", ReadOnly: true}, {Path: "/work/.qory/runs/" + runID, ReadOnly: true}},
 	}
 }
 
@@ -142,6 +154,9 @@ func TestDockerCommandLines(t *testing.T) {
 				t.Error("Close left the environment file")
 			}
 			got := strings.Join(rec.lines, "\n") + "\n\nwrapped:\n" + words(append([]string{wrapped.Command}, wrapped.Args...)) + "\n\nenvironment:\n" + string(env)
+			if rec.relayEnv != RelayTokenEnv+"=not-a-real-token\n" || strings.Contains(got, "not-a-real-token") {
+				t.Errorf("the proxy's token belongs in the relay's environment file and nowhere else; the file holds %q", rec.relayEnv)
+			}
 			if strings.Contains(strings.Join(rec.lines, "\n")+strings.Join(wrapped.Args, " "), "not-a-real-key") {
 				t.Error("a value of the environment is on a command line")
 			}

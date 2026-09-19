@@ -6,11 +6,20 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/qoryai/runner/internal/proxy"
 )
+
+// RelayTokenEnv is the variable of the relay's environment that holds the run's proxy
+// token. With it set the relay opens every connection it forwards with the proxy's
+// preamble, which is how the proxy knows the run's relay from anything else that
+// reaches its address.
+const RelayTokenEnv = "QORY_RELAY_TOKEN"
 
 // RelayReady is the line the relay prints once every port listens. An adapter waits
 // for it before it starts the agent.
@@ -28,6 +37,10 @@ const RelayReady = "relay: listening"
 func Relay(ctx context.Context, forwards []string, ready io.Writer) error {
 	if len(forwards) == 0 {
 		return errors.New("relay: no forwards; want port=host:port")
+	}
+	preamble := ""
+	if token := os.Getenv(RelayTokenEnv); token != "" {
+		preamble = proxy.Preamble + " " + token + "\n"
 	}
 	var lc net.ListenConfig
 	var wg sync.WaitGroup
@@ -51,7 +64,7 @@ func Relay(ctx context.Context, forwards []string, ready io.Writer) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			serve(ctx, ln, target)
+			serve(ctx, ln, target, preamble)
 		}()
 	}
 	fmt.Fprintln(ready, RelayReady)
@@ -75,8 +88,9 @@ func parseForward(f string) (int, string, error) {
 // dialWait is how long the target has to accept a connection.
 const dialWait = 10 * time.Second
 
-// serve accepts until the listener closes and copies each connection to the target.
-func serve(ctx context.Context, ln net.Listener, target string) {
+// serve accepts until the listener closes and copies each connection to the target,
+// after the preamble when there is one.
+func serve(ctx context.Context, ln net.Listener, target, preamble string) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for {
@@ -106,6 +120,11 @@ func serve(ctx context.Context, ln net.Listener, target string) {
 			}
 			stop := context.AfterFunc(ctx, func() { client.Close(); upstream.Close() })
 			defer stop()
+			if _, err := io.WriteString(upstream, preamble); err != nil {
+				client.Close()
+				upstream.Close()
+				return
+			}
 			pipe(client, upstream)
 		}()
 	}

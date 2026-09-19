@@ -59,6 +59,10 @@ type Proxy struct {
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 	wg      sync.WaitGroup
 	guarded atomic.Bool
+	// token, when set, is what every connection must open with; refused is told of one
+	// that did not.
+	token   atomic.Pointer[string]
+	refused func()
 	// opened are the hosts a guarded proxy reaches on this machine.
 	opened []string
 }
@@ -86,6 +90,7 @@ func Listen(addr string, mode policy.Mode, allow []string, observe func(Decision
 		return nil, err
 	}
 	p := &Proxy{mode: mode, allow: allow, observe: observe, ln: ln}
+	gate := &gate{Listener: ln, p: p}
 	// The guard checks the address a name resolved to, at the moment of the connection,
 	// so a name that resolves to this machine is refused like the address itself.
 	d := &net.Dialer{Timeout: 30 * time.Second, ControlContext: func(ctx context.Context, _, address string, _ syscall.RawConn) error {
@@ -106,7 +111,7 @@ func Listen(addr string, mode policy.Mode, allow []string, observe func(Decision
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		p.srv.Serve(ln)
+		p.srv.Serve(gate)
 	}()
 	return p, nil
 }

@@ -242,10 +242,8 @@ wall:
 - The fleet layer: register, heartbeat, claim, the policy in the run start answer.
 - Hook events on an engine inside a virtual machine, until the forwarder has a network
   transport through the relay.
-- On a Linux node the proxy's address is reached by other containers of the same engine;
-  the policy and the guard bound what they can do with it.
 - Git inside the container when the checkout is a git worktree, whose repository data
-  lies outside the mounts.
+  lies outside the mounts, unless the run lists that directory among them.
 - Rules on URL paths. The proxy sees a host and a port, never inside a TLS connection.
 
 ## Layout

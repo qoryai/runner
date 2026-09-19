@@ -286,6 +286,16 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// addresses are not its to reach.
 		px.Guard(pol.Policy.Egress.Allow)
 	}
+	// Behind a wall the proxy listens where other containers of the engine, or other
+	// processes of the machine, may reach it. It serves the run's relay alone.
+	token := ""
+	if spec.Wall != nil {
+		token = event.NewID() + event.NewID()
+		var once sync.Once
+		px.Require(token, func() {
+			once.Do(func() { spec.Report("a connection to the proxy that was not the run's relay was refused") })
+		})
+	}
 
 	sock, err := socket.Listen()
 	if err != nil {
@@ -322,7 +332,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		launch, err = enclosure.Wrap(ctx, wall.Launch{
 			Command: spec.Command, Args: args, Dir: spec.Dir, Interactive: spec.Interactive,
 			Env:   environment(spec.Env, []string{EnvRunID + "=" + runID}),
-			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits,
+			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits, ProxyToken: token,
 		})
 		if err != nil {
 			sinks.Close(ctx)

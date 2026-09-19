@@ -3,12 +3,14 @@ package proxy_test
 import (
 	"crypto/tls"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/proxy"
@@ -259,5 +261,42 @@ func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 			}
 		}
 		p.Close()
+	}
+}
+
+// TestRequireServesOnlyConnectionsThatOpenWithTheToken pins the gate: with a token
+// required, a connection that opens with the preamble is served as ever, and one that
+// does not is closed unanswered and told of.
+func TestRequireServesOnlyConnectionsThatOpenWithTheToken(t *testing.T) {
+	p, err := proxy.Listen("", policy.Observe, nil, func(proxy.Decision) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	refused := make(chan struct{}, 4)
+	p.Require("the-runs-token", func() { refused <- struct{}{} })
+	ask := func(open string) string {
+		c, err := net.Dial("tcp", p.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		io.WriteString(c, open+"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+		b, _ := io.ReadAll(c)
+		return string(b)
+	}
+	if got := ask(proxy.Preamble + " the-runs-token\n"); !strings.HasPrefix(got, "HTTP/1.1 400") {
+		t.Errorf("with the token the proxy answered %q, want its refusal of a request that names no target", got)
+	}
+	for _, open := range []string{"", proxy.Preamble + " another-runs-token\n"} {
+		if got := ask(open); got != "" {
+			t.Errorf("opened with %q the proxy answered %q", open, got)
+		}
+		select {
+		case <-refused:
+		case <-time.After(5 * time.Second):
+			t.Errorf("opened with %q: nobody was told", open)
+		}
 	}
 }

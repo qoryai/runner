@@ -32,6 +32,13 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Changed
 
+- Behind a wall the proxy serves the run's relay alone. Its address was reached by
+  other containers of the same engine, on a Linux host, and by other processes of the
+  machine; the run's policy bounded what they did with it. Now the relay opens every
+  connection it forwards with a token of the run's, `Launch.ProxyToken`, given to the
+  relay through a file and to nothing inside the enclosure, and the proxy closes
+  unanswered whatever opens otherwise. An adapter of your own passes the token to its
+  relay, which is `wall.Relay` with `QORY_RELAY_TOKEN` in its environment.
 - A `Spec.RunID` that is not a UUID in the canonical lower-case form is refused. It
   went unchecked into the run directory's path and into the events' `subject`, which
   the envelope's schema holds to a UUID.
