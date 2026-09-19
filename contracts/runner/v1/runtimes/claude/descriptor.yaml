@@ -5,6 +5,13 @@
 # canonical source. The standard output, JSON lines when the session runs on pipes, adds
 # only what the hooks do not say: the result line with the outcome, the turns and the cost.
 # Its init line is not mapped, because SessionStart already produced session.started.
+#
+# Work in the background has no hook of its own. Its start is a tool call like any other,
+# with run_in_background in the input and whatever the tool answered in the response, and
+# a subagent's start and end are the subagent hooks. What the runtime says after that is the list of
+# what is still running, in the Stop and SubagentStop inputs, copied as background_tasks:
+# a task gone from the list has ended. The runtime reports no exit status and no duration
+# for it, so neither is here.
 version: 1
 runtime: claude
 runtime_version: "2.1.273"
@@ -93,12 +100,14 @@ rules:
       agent_id: agent_id
       agent_type: agent_type
       message: last_assistant_message
+      background_tasks: background_tasks
   - source: hooks
     match: {hook_event_name: Stop}
     type: ai.qory.session.turn_finished
     data:
       session_id: session_id
       message: last_assistant_message
+      background_tasks: background_tasks
       agent_id: agent_id
       agent_type: agent_type
   - source: hooks

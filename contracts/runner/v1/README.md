@@ -353,13 +353,26 @@ The session's, produced by a descriptor from what the runtime reports:
 | `ai.qory.session.tool_started` | the runtime is about to run a tool | `session_id`, `tool`, `tool_use_id`, `input` |
 | `ai.qory.session.tool_finished` | a tool ran and returned | the same, `response`, `duration_ms` |
 | `ai.qory.session.tool_failed` | a tool ran and failed | the same, `error`, `interrupted`, `duration_ms` |
-| `ai.qory.session.turn_finished` | the runtime finished responding | `session_id`, `message` |
+| `ai.qory.session.turn_finished` | the runtime finished responding | `session_id`, `message`, `background_tasks` |
 | `ai.qory.session.turn_failed` | a turn ended on an API error | `session_id`, `error`, `details`, `message` |
 | `ai.qory.session.subagent_started` | a subagent was spawned | `session_id`, `agent_id`, `agent_type` |
-| `ai.qory.session.subagent_finished` | a subagent finished | the same, `message` |
+| `ai.qory.session.subagent_finished` | a subagent finished | the same, `message`, `background_tasks` |
 | `ai.qory.session.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
 | `ai.qory.session.ended` | the runtime closed its session | `session_id`, `reason` |
 | `ai.qory.session.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
+
+**Work in the background.** A runtime that starts a command or a subagent in the
+background says so where it says everything else: the start is a tool call, recorded as
+`ai.qory.session.tool_started` with the runtime's own `input`, `run_in_background` in
+Claude Code's, and as `ai.qory.session.tool_finished` with whatever the tool answered; a
+subagent's start and end are the subagent events, with its `agent_id` and `agent_type`.
+After that the runtime reports a list, not an event: what is still running, each entry
+with the runtime's `id`, `type`, `status` and `description`, and a shell's `command` or a
+subagent's `agent_type`. The descriptor copies it as `background_tasks` onto
+`turn_finished` and `subagent_finished`, so a receiver that wants a task's end takes the
+first list the task is missing from. Claude Code reports no exit status and no duration
+for a background task, so the record has neither; a descriptor copies what a runtime
+says and computes nothing, and the runtime's own output stream is where more is found.
 
 Every session event that comes from a hook may carry `agent_id` and `agent_type` when
 it happened inside a subagent; `ai.qory.session.result`, read from the runtime's output,

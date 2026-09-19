@@ -42,6 +42,12 @@ release may change what an existing document does, and says so under Upgrading.
   `ai.qory.run.policy_applied` lists `credentials`, `paths` and the `terminated` hosts,
   and on a terminated host `ai.qory.run.egress` is one event per request with
   `request_method`, `path`, `path_rule` and `credential`.
+- Work in the background, in the Claude Code descriptor: `ai.qory.session.turn_finished`
+  and `ai.qory.session.subagent_finished` carry `background_tasks`, the runtime's own
+  list of what is still running, each with its id, type, status, description, and a
+  shell's command or a subagent's type. A background command's start was already a
+  `tool_started` with `run_in_background` in its input. The runtime reports no exit
+  status and no duration for such a task, so the record has neither.
 - The conformance suite checks, from inside the enclosure, that a host held to paths is
   held to them, that a terminated host is answered with the run's authority and held to
   its credential's paths, that the credential is set outside, and that no token and no
