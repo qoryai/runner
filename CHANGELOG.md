@@ -42,6 +42,10 @@ release may change what an existing document does, and says so under Upgrading.
   `ai.qory.run.policy_applied` lists `credentials`, `paths` and the `terminated` hosts,
   and on a terminated host `ai.qory.run.egress` is one event per request with
   `request_method`, `path`, `path_rule` and `credential`.
+- The conformance suite checks, from inside the enclosure, that a host held to paths is
+  held to them, that a terminated host is answered with the run's authority and held to
+  its credential's paths, that the credential is set outside, and that no token and no
+  key is inside: not in the environment, not in the bundle, not in the record.
 - `session.Resend`: completes and delivers the record of a run that is over, for a
   job's last step after a runner that died or a receiver that was away. The run
   directory gains `delivered.log`, a line per accepted batch written as the answer

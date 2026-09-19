@@ -40,6 +40,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/session"
 	"github.com/qoryai/runner/wall"
 )
@@ -61,6 +62,17 @@ const EnvHelper = "QORY_WALL_HELPER"
 // failure, so the machine that is meant to prove an adapter cannot pass by proving
 // nothing.
 const EnvRequire = "QORY_WALL_REQUIRE"
+
+// What the suite's credential is: a token in the suite's own environment, for a host
+// that does not exist, on one path, with a placeholder inside. The host never needs to
+// answer: what is checked happens between the enclosure and the proxy.
+const (
+	tokenVar       = "QORY_WALLTEST_TOKEN"
+	tokenMark      = "walltest-token-held-outside"
+	placeholderVar = "PROBE_TOKEN"
+	credentialHost = "credential.invalid"
+	credentialPath = "/inside-the-paths"
+)
 
 // hostOnly is a variable the suite sets in its own environment and must not find
 // inside.
@@ -156,6 +168,7 @@ func Run(t *testing.T, o Options) {
 	defer host.Close()
 	origin := hosts{origin: o.Origin, own: fmt.Sprintf("http://127.0.0.1:%d/", ln.Addr().(*net.TCPAddr).Port), port: ln.Addr().(*net.TCPAddr).Port}
 	t.Setenv(hostOnly, "1")
+	t.Setenv(tokenVar, tokenMark+"-"+strconv.Itoa(os.Getpid()))
 	outside := filepath.Join(t.TempDir(), "host-file")
 	if err := os.WriteFile(outside, []byte("the host's"), 0o644); err != nil {
 		t.Fatal(err)
@@ -184,7 +197,20 @@ func Run(t *testing.T, o Options) {
 		}
 	}
 	originHost := mustHost(t, o.Origin)
-	check("what went through the proxy is recorded", fmt.Sprint(egress) == "["+originHost+" allowed "+originHost+" denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address]", egress)
+	check("what went through the proxy is recorded", fmt.Sprint(egress) == "["+originHost+" allowed "+originHost+" denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address "+originHost+" denied "+originHost+" "+credentialHost+" denied "+credentialHost+" "+credentialHost+" allowed "+credentialHost+"]", egress)
+	check("a host held to paths is held to them", p.PathDenied == 403, fmt.Sprintf("a path outside the host's answered %d", p.PathDenied))
+	check("a terminated host is answered with the run's authority, held to the credential's paths", p.TLSDenied == 403 && p.TLSAllowed == 502,
+		fmt.Sprintf("outside the paths answered %d (%s), inside them %d (%s), want the proxy's 403 and, with nothing upstream, its 502; the bundle is %q with %d certificates", p.TLSDenied, p.TLSDeniedErr, p.TLSAllowed, p.TLSAllowedErr, p.Bundle, p.BundleCerts))
+	set := ""
+	for _, e := range r.events {
+		if d, _ := e["data"].(map[string]any); e["type"] == "ai.qory.run.egress" && d["path"] == credentialPath {
+			set, _ = d["credential"].(string)
+		}
+	}
+	check("the credential is set outside, on its own paths", set == "suite", fmt.Sprintf("the request inside the credential's paths is recorded with the credential %q", set))
+	record, _ := os.ReadFile(filepath.Join(r.res.Dir, "events.jsonl"))
+	check("no credential inside the enclosure", p.Placeholder == credential.Placeholder && len(p.TokenSeen) == 0 && p.BundleCerts > 0 && p.BundleKeys == 0 && !bytes.Contains(record, []byte(tokenMark)),
+		fmt.Sprintf("the placeholder is %q; the token was seen in %v; the bundle holds %d certificates and %d keys; the token is in the record: %v", p.Placeholder, p.TokenSeen, p.BundleCerts, p.BundleKeys, bytes.Contains(record, []byte(tokenMark))))
 	check("no way to this machine through the proxy unless the policy names it", p.OwnViaProxy == 403 && p.MetaViaProxy == 403 && own.Load() == 0, fmt.Sprintf("this machine's listener answered %d through the proxy and was reached %d times; the metadata address answered %d", p.OwnViaProxy, own.Load(), p.MetaViaProxy))
 	check("no way to the engine's host by the network's first address", len(p.HostByGateway) == 0, p.HostByGateway)
 	check("the record is read-only", p.RecordWrite != "", "the probe opened events.jsonl for writing")
@@ -277,7 +303,7 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		t.Fatal(err)
 	}
 	// The metadata address is in the list to show that no entry opens it.
-	allow := []string{mustHost(t, h.origin), "169.254.169.254"}
+	allow := []string{mustHost(t, h.origin), "169.254.169.254", credentialHost}
 	if h.named {
 		allow = append(allow, "127.0.0.1")
 	}
@@ -295,12 +321,15 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 			"PROBE_OWN=" + h.own,
 			"PROBE_HOST_PORT=" + strconv.Itoa(h.port),
 		},
-		Dir:           dir,
-		Interactive:   interactive,
-		Stdin:         strings.NewReader(""),
-		Stdout:        &out,
-		Stderr:        &errs,
-		Policy:        &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: allow}},
+		Dir:         dir,
+		Interactive: interactive,
+		Stdin:       strings.NewReader(""),
+		Stdout:      &out,
+		Stderr:      &errs,
+		Policy: &session.Policy{Version: 1,
+			Egress:      session.PolicyEgress{Mode: "enforce", Allow: allow, Paths: map[string][]string{mustHost(t, h.origin): {"/"}}},
+			Credentials: []session.PolicyCredential{{Name: "suite"}}},
+		Credentials:   []session.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}},
 		Forwarder:     o.Forwarder,
 		Wall:          o.Wall,
 		Image:         o.Image,

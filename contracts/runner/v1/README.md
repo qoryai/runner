@@ -538,6 +538,9 @@ for all of them.
   the run passes;
 - a user that is not root, no added capabilities, no privileged mode, no host
   namespaces;
+- no credential the run's policy selects: a placeholder where a program wants one set
+  and the certificate of the run's authority, never a token and never the authority's
+  key;
 - never the container runtime's own socket: a process that can ask the daemon for a
   container on the host's network has left the wall. A mount that is a socket, or a
   directory holding a runtime's, is refused.
