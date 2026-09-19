@@ -120,3 +120,50 @@ func TestProxyBindIsWhereTheProxyListens(t *testing.T) {
 		t.Error("the run started with a proxy address this machine does not hold")
 	}
 }
+
+// TestCredentialsCrossAsAnAuthorityAndAPlaceholder pins what a wall is given when the
+// run's policy selects a credential: the run authority's certificate and a placeholder,
+// never the token; what the record says of it; and the runs that do not start.
+func TestCredentialsCrossAsAnAuthorityAndAPlaceholder(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
+	defs := []session.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer", Placeholders: []string{"MODEL_TOKEN"}}}
+	pol := &session.Policy{Version: 1,
+		Egress:      session.PolicyEgress{Mode: "enforce", Allow: []string{"api.model.example", "git.example.com"}, Paths: map[string][]string{"git.example.com": {"/acme/*"}}},
+		Credentials: []session.PolicyCredential{{Name: "model"}}}
+	w := &openWall{}
+	sp := spec(t, pol, "FAKE_EXIT=0")
+	sp.Wall, sp.Image, sp.Credentials = w, "example.com/agent:1", defs
+	res, err := runWithSettingsEnv(t, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(w.got.CA, []byte("BEGIN CERTIFICATE")) || bytes.Contains(w.got.CA, []byte("PRIVATE KEY")) {
+		t.Errorf("the wall got %q as the authority", w.got.CA)
+	}
+	if !slices.ContainsFunc(w.got.Env, func(kv string) bool { return strings.HasPrefix(kv, "MODEL_TOKEN=qory-") }) {
+		t.Errorf("no placeholder in %v", w.got.Env)
+	}
+	record, _ := os.ReadFile(filepath.Join(res.Dir, "events.jsonl"))
+	if strings.Contains(strings.Join(w.got.Env, " ")+string(record), "the-token-held-outside") {
+		t.Error("the token crossed the wall or reached the record")
+	}
+	applied := data(ofType(events(t, res), "ai.qory.run.policy_applied")[0])
+	creds, _ := applied["credentials"].([]any)
+	terminated, _ := applied["terminated"].([]any)
+	if len(creds) != 1 || creds[0].(map[string]any)["scheme"] != "bearer" || len(terminated) != 2 || applied["paths"] == nil {
+		t.Errorf("run.policy_applied %v", applied)
+	}
+
+	for name, change := range map[string]func(*session.Spec){
+		"no wall":                            func(s *session.Spec) { s.Wall = nil },
+		"a credential nobody defined":        func(s *session.Spec) { s.Credentials = nil },
+		"a value passed for the placeholder": func(s *session.Spec) { s.Env = append(s.Env, "MODEL_TOKEN=a-real-one") },
+	} {
+		sp := spec(t, pol)
+		sp.Wall, sp.Image, sp.Credentials = &openWall{}, "example.com/agent:1", defs
+		change(&sp)
+		if _, err := session.Run(context.Background(), sp); err == nil {
+			t.Errorf("%s: the run started", name)
+		}
+	}
+}

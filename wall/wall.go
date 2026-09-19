@@ -77,6 +77,12 @@ type Launch struct {
 	// not empty. An adapter gives it to its relay and to nothing inside the enclosure,
 	// so the proxy serves this run's relay alone, whoever else reaches its address.
 	ProxyToken string
+	// CA, when not empty, is the certificate of the run's authority, PEM: the proxy
+	// answers as some hosts itself, to set a credential the enclosure never holds, and
+	// what runs inside must trust it for those. An adapter shows the enclosure one
+	// bundle, the image's own authorities and this one, and points the variables
+	// programs read a bundle's path from at it. The key never crosses.
+	CA []byte
 	// Socket is the path of the hook socket on the host, empty when there is none.
 	Socket string
 	// Mounts are the files and directories of the host the run lists beside Dir: the

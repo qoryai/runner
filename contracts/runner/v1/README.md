@@ -31,8 +31,8 @@ directory, `v2`, never a change in place.
 The runner's duties, in the order that matters when they conflict:
 
 1. **Policy.** The runner reads one policy document, pinned for the run, that can only
-   narrow what the binary allows: the egress mode and the allow list now, mounts and
-   credentials later. A policy that cannot be read means no run. No policy means observe
+   narrow what the binary allows: the egress mode, the allow list, the paths of a host,
+   and which of the machine's credentials the run may use. A policy that cannot be read means no run. No policy means observe
    everything and deny nothing. Nothing in a policy grants; a stale or failed policy
    degrades toward more restrictive, never toward more permissive.
 2. **Egress.** The runner owns an HTTP proxy, on loopback or, behind a wall, on the one
@@ -43,9 +43,10 @@ The runner's duties, in the order that matters when they conflict:
    the allow list is denied. A denied attempt is recorded and the session continues; a
    denial never ends a run.
 3. **Credentials.** The session holds none of the runner's. On a developer machine the
-   session runs with the developer's own environment. Under a node runner, the runner
-   holds the run's git and model credentials in memory and the session sees a workspace
-   and a local model endpoint; that mode is the node layer's and is not in this version.
+   session runs with the developer's own environment. Behind a wall the runner holds the
+   credentials the run's policy selects, in memory and outside the enclosure, and its
+   proxy sets each on the requests to the hosts it is for (§Credentials): the session
+   reaches a code host and a model endpoint as itself and never reads what it is.
 4. **Liveness.** A heartbeat while the session runs; the exit as the result.
 5. **Reporting.** The session's terminal bytes as log chunks, the runner's observations
    as events, the runtime's own output mapped to session events by a descriptor. Every
@@ -60,8 +61,19 @@ The runner's duties, in the order that matters when they conflict:
 
 Stated so a receiver reads the record for what it is.
 
-- The proxy sees host names and ports, never the content of a TLS connection. A
-  `CONNECT` tunnel is a blind relay once established.
+- The proxy sees host names and ports, never the content of a TLS connection: a
+  `CONNECT` tunnel is a blind relay once established. The exception is stated in the
+  run's record: behind a wall, for a host the run holds a credential for or has path
+  rules for, the proxy ends the session's TLS itself and reads each request's method and
+  path. `ai.qory.run.policy_applied` lists those hosts as `terminated`, and no other
+  host is read.
+- On a terminated host the session's side of the connection is HTTP/1.1, so a protocol
+  that needs HTTP/2 end to end, gRPC say, does not work there, and a program that pins
+  the host's own certificate refuses the run's. A host that sends a request's headers
+  back, an echo service, hands the session the credential the proxy set. A path rule
+  reads a path and nothing else: where a host takes every request on one path, a
+  GraphQL endpoint say, the path is reachable or it is not, and what the request may
+  touch behind it is bounded by the credential's own scope, not by the runner.
 - Only proxy-aware programs are seen. The agent CLIs, git over HTTPS, curl, the package
   managers and the language runtimes honour the proxy variables; SSH does not, and a
   program that ignores the variables is not seen. Without a wall, enforce mode is
@@ -77,9 +89,8 @@ Stated so a receiver reads the record for what it is.
   both; the run's policy can only be held at the proxy. Neither tells two accounts apart
   on one allowed host: a code host, an object store and a model endpoint each carry data
   to whoever owns the account the request names.
-- Behind a wall the model credential is in the enclosure's environment, because the
-  runtime needs it and the run passes it. Keeping it outside, injected by the proxy, is
-  not in this version. What is handed in is the agent's: a checkout that keeps a token
+- A credential the run passes into the enclosure's environment is the agent's; one the
+  policy selects stays outside (§Credentials). What is handed in is the agent's: a checkout that keeps a token
   in the repository's configuration hands the token in with the workspace. The run
   directory is shown read-only, so the agent cannot change `events.jsonl`; when it lies
   inside the workspace the agent can still rename the directory above it, which moves
@@ -193,6 +204,8 @@ egress:
 | `version` | `1`. A runner refuses a version it does not read, naming it |
 | `egress.mode` | `observe`: every connection is allowed and recorded. `enforce`: a connection to a host outside `allow` is denied and recorded |
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. Absent is empty, and `enforce` with an empty list reaches nothing |
+| `egress.paths` | by host, in `allow`'s grammar, the paths the session may ask of it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. An empty list is no path at all |
+| `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say. A policy defines none (§Credentials) |
 
 **Narrowing.** The harness compose reports the hosts its modules declared. The command
 hands that list to the runner, and the effective allow list is the declared entries the
@@ -211,6 +224,93 @@ a plain request is the authority of its absolute-form target, never its `Host` h
 Host names are compared lower-case; an IP literal matches only an identical entry. The
 first entry that matches is the rule reported. A denial is a `403 Forbidden` with a
 one-line text body naming the host and the mode; a tunnel is never opened for it.
+
+**Matching a path.** On a terminated host every request is decided, by the policy's
+paths for the host and by the paths of the credential that is for it, and it passes
+when every list that exists has an entry that matches. The comparison is exact, case
+included: on a host that ignores case this denies a spelling the host would have
+taken, never the reverse, so whoever writes a path writes it as the host does. A path
+that could be read two ways is denied in either mode, with the rule
+`wall:ambiguous-path`: an encoded slash, backslash, dot or percent sign, a backslash, an
+empty segment, a dot segment. Under `observe` a path no entry matches is recorded as
+denied and let through, as a host is, but the credential is set only where its own paths
+match: observing is no reason to hand a token to a path nobody configured. The host
+asked of upstream is the one the connection was opened to and decided on, whatever
+`Host` a request names. A denial is a `403` naming the method, the host and the path.
+A plain request is held to the same paths and never carries a credential.
+
+## Credentials
+
+A credential is a token the runner holds for the session and the session never holds.
+The machine defines credentials; the run's policy selects among them by name and
+defines none, so whoever writes a policy chooses among the programs the machine's owner
+installed and never names one. They need a wall: without one a program that ignores the
+proxy is bound by nothing here.
+
+A definition says where the token comes from, exactly one of:
+
+| Source | The token is |
+|---|---|
+| `env` | a variable of the runner's own environment, read once when the run starts |
+| `file` | a file's content, read again whenever it is used, so whatever rotates it tells no one |
+| `adapter` | what a program of the machine's prints |
+
+**An adapter** knows one kind of host: a source code host, an artifact store. The runner
+knows none, so nothing in it names one. The runner starts the adapter outside the
+enclosure, with its own environment, a minute to answer, and `${argument}` in its
+arguments replaced by the argument the policy gives, which the definition's pattern
+must match whole: one word of the command line, never a shell's. It prints one
+document, `credential.schema.json`, and exits 0; anything else is no run, and the line it
+wrote to standard error is the reason given.
+
+```json
+{"version": 1, "token": "…", "expires_at": "2026-09-19T14:00:00Z",
+ "apply": [
+   {"hosts": ["git.example.com"], "scheme": "basic", "username": "x-access-token",
+    "paths": ["/acme/shop.git/*", "/acme/shop/*"]},
+   {"hosts": ["api.git.example.com"], "scheme": "bearer",
+    "paths": ["/repos/acme/shop", "/repos/acme/shop/*"]}],
+ "placeholders": ["GIT_HOST_TOKEN"]}
+```
+
+The adapter says how its token is used, because hosts differ in it: which hosts, which
+scheme, and which paths make up what the run asked for. The schemes are a closed set,
+`bearer`, `basic` with a `username`, `header` with a header's name; an adapter chooses
+among what the runner does and adds nothing to it. Of a host with `paths` the run
+reaches those and no other, so one repository's credential does not open another
+organization's on the same host; a path the adapter leaves out, the host's GraphQL
+endpoint say, is not reached. A definition may name `hosts` and `paths` of its own for
+an adapter: the most it may claim. For `env` and `file`, which have nobody to say it,
+the definition's `hosts`, scheme and `paths` are the use itself.
+
+Before the run starts every selected credential is resolved, and what cannot hold is
+no run: a name the machine does not define, an argument it does not provide for, a host
+two credentials claim, a claim above the definition's, and under `enforce` a host the
+run's allow list does not cover. The runner asks an adapter again five minutes before
+`expires_at`, and when a host answers 401 to a request it set the token on, not more
+often than every thirty seconds. The new answer changes the token and nothing else: one
+that names other hosts, schemes or paths is refused and reported, and the old token
+stays, because what a run reaches is fixed when it starts.
+
+**Placeholders.** A program often does not start without a credential set. A
+definition, or an adapter's answer, names variables the enclosure gets with the value
+`qory-sets-the-credential-outside-the-enclosure`, which is no credential anywhere; the
+proxy replaces what the program sends. A run that passes a value of its own for such a
+variable does not start.
+
+**Termination.** For the hosts the credentials are for, and the hosts with path rules,
+the proxy ends the session's TLS itself, answering as the host with a certificate of an
+authority made for the run. The authority's key is in the runner's memory and nowhere
+else, and gone with the run; its certificate is what the wall gives the enclosure to
+trust (§The wall). The proxy verifies the real host against the machine's own roots.
+Every other host stays a tunnel the proxy does not read, and a run with no credential
+and no path rule has no authority at all.
+
+**The record.** `ai.qory.run.policy_applied` carries each use, `name`, `hosts`, `scheme`
+and `paths`, and the `terminated` hosts. On a terminated host `ai.qory.run.egress` is one
+event per request, `method: HTTPS` with `request_method`, `path` without its query,
+`path_rule`, and `credential`, the name of the one the proxy set. No event, no report
+and no error carries a token.
 
 ## The events
 
@@ -238,9 +338,9 @@ The types, one namespace. The runner's own:
 |---|---|---|
 | `ai.qory.ping` | before the runtime starts, to the webhook only, when one is configured | `runner_version`, `events` |
 | `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
-| `ai.qory.run.policy_applied` | right after, once | `mode`, `allow`, `source`, `digest`, `declared` |
+| `ai.qory.run.policy_applied` | right after, once | `mode`, `allow`, `source`, `digest`, `declared`, and with them set `paths`, `credentials`, `terminated` |
 | `ai.qory.run.log` | one per chunk of output: one line or 4096 bytes, whichever comes first | `stream`, `bytes` |
-| `ai.qory.run.egress` | one per connection through the proxy, allowed or denied | `host`, `port`, `method`, `decision`, `mode`, `rule` |
+| `ai.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request | `host`, `port`, `method`, `decision`, `mode`, `rule`, and per request `request_method`, `path`, `path_rule`, `credential` |
 | `ai.qory.run.heartbeat` | every `interval_seconds` while the runtime runs | `elapsed_seconds`, `interval_seconds` |
 | `ai.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
 
@@ -441,6 +541,15 @@ for all of them.
 - never the container runtime's own socket: a process that can ask the daemon for a
   container on the host's network has left the wall. A mount that is a socket, or a
   directory holding a runtime's, is refused.
+
+When the run has an authority of its own (§Credentials), a wall gives the enclosure
+one bundle to trust, the image's own authorities with the run's certificate after them,
+and points the variables programs read a bundle's path from at it: `SSL_CERT_FILE`,
+`GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`
+unless the caller names others. The bundle is the image's and one more, never the run's
+alone, because those variables replace a program's trust and do not add to it; an image
+that keeps a bundle nowhere known gets the run's alone and reaches only the terminated
+hosts over TLS, which is the image's to mend. The authority's key never crosses.
 
 A run may name limits on what the agent uses, processors, memory, processes and the
 size of `/dev/shm`; an adapter passes them to its engine and a run that names none gets

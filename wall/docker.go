@@ -1,11 +1,13 @@
 package wall
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"debug/elf"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -27,6 +29,9 @@ const (
 	HelperPath = "/qory/qory"
 	// hooksDir is where the directory holding the hook socket is mounted.
 	hooksDir = "/qory/hooks"
+	// BundlePath is where the enclosure finds the authorities it trusts when the run has
+	// one of its own: the image's bundle and the run's certificate, in one file.
+	BundlePath = "/qory/ca-bundle.pem"
 	// relayAlias is the name the agent reaches the relay by, and relayPort the port the
 	// relay forwards to the proxy.
 	relayAlias = "qory-proxy"
@@ -56,6 +61,10 @@ type Docker struct {
 	// RelayArgs are the arguments that make Helper run [Relay]; the forwards follow
 	// them.
 	RelayArgs []string
+	// CAEnv names the variables that point a program at [BundlePath] when the run has
+	// an authority of its own; nil means [DefaultCAEnv]. A program that reads another
+	// is served by naming it here.
+	CAEnv []string
 	// User is the uid:gid both containers run as; empty means this process's own, so
 	// the workspace's files keep their owner. Root is refused.
 	User string
@@ -68,6 +77,8 @@ type Docker struct {
 type system interface {
 	// run runs a command and returns its output, standard error included.
 	run(ctx context.Context, argv []string) ([]byte, error)
+	// output runs a command and returns its standard output alone.
+	output(ctx context.Context, argv []string) ([]byte, error)
 	// local reports whether this machine holds the address.
 	local(ip string) bool
 	// tempDir makes a private directory.
@@ -80,6 +91,14 @@ type system interface {
 	// checkHelper refuses a helper that cannot run in a Linux container.
 	checkHelper(path string) error
 }
+
+// DefaultCAEnv are the variables the common programs read a bundle's path from:
+// OpenSSL and Go, git, Node, Python's requests, curl.
+var DefaultCAEnv = []string{"SSL_CERT_FILE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
+
+// imageBundles are where an image keeps its authorities: Debian and Alpine, Red Hat,
+// OpenSUSE, and the OpenSSL default.
+var imageBundles = []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem"}
 
 // What goes on a command line is checked for its shape first, because a word that
 // starts with a dash is a flag to the command that reads it: a run id names things, an
@@ -245,6 +264,15 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if l.Socket != "" {
 		env = append(env, socket.Env+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
 	}
+	if len(l.CA) > 0 {
+		names := e.d.CAEnv
+		if names == nil {
+			names = DefaultCAEnv
+		}
+		for _, n := range names {
+			env = append(env, n+"="+BundlePath)
+		}
+	}
 	envFile, err := e.envFile("env", env)
 	if err != nil {
 		return Launch{}, err
@@ -272,6 +300,12 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if _, err := e.docker(pull, create...); err != nil {
 		return Launch{}, err
 	}
+	var bundle string
+	if len(l.CA) > 0 {
+		if bundle, err = e.bundle(ctx, l.CA); err != nil {
+			return Launch{}, err
+		}
+	}
 	if _, err := e.docker(ctx, "network", "connect", "--alias", relayAlias, e.inside(), e.relay()); err != nil {
 		return Launch{}, err
 	}
@@ -293,10 +327,61 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	for _, m := range mounts {
 		run = append(run, "--mount", m)
 	}
+	if bundle != "" {
+		run = append(run, "--mount", bundle)
+	}
 	run = append(run, "--entrypoint", l.Command, e.req.Image)
 	run = append(run, l.Args...)
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
 	return Launch{Command: e.command(), Args: run, Dir: l.Dir}, nil
+}
+
+// bundle writes the file the enclosure trusts: the image's own authorities, read out of
+// the relay's container, which is the same image and exists by now, and the run's
+// certificate after them. An image that keeps a bundle nowhere known gets the run's
+// alone, which serves the hosts the proxy answers as and no other; that is the image's
+// to mend. It returns the file's mount.
+func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error) {
+	var image []byte
+	for _, p := range imageBundles {
+		out, err := e.sys.output(ctx, []string{e.command(), "cp", "--follow-link", e.relay() + ":" + p, "-"})
+		if err != nil {
+			continue
+		}
+		if b, err := firstFile(out); err == nil && bytes.Contains(b, []byte("BEGIN CERTIFICATE")) {
+			image = b
+			break
+		}
+	}
+	if e.temp == "" {
+		dir, err := e.sys.tempDir()
+		if err != nil {
+			return "", err
+		}
+		e.temp = dir
+	}
+	file := filepath.Join(e.temp, "ca-bundle.pem")
+	if len(image) > 0 && !bytes.HasSuffix(image, []byte("\n")) {
+		image = append(image, '\n')
+	}
+	if err := os.WriteFile(file, append(image, ca...), 0o644); err != nil {
+		return "", err
+	}
+	return mount(file, BundlePath, true)
+}
+
+// firstFile is the content of the first file in a tar stream, what docker cp writes.
+func firstFile(stream []byte) ([]byte, error) {
+	r := tar.NewReader(bytes.NewReader(stream))
+	for {
+		h, err := r.Next()
+		if err != nil {
+			return nil, err
+		}
+		if h.Typeflag == tar.TypeReg {
+			return io.ReadAll(io.LimitReader(r, 16<<20))
+		}
+	}
 }
 
 // mounts are the launch's own: the workspace, what it lists, the socket's directory.
@@ -500,6 +585,10 @@ type hostSystem struct{}
 
 func (hostSystem) run(ctx context.Context, argv []string) ([]byte, error) {
 	return exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
+}
+
+func (hostSystem) output(ctx context.Context, argv []string) ([]byte, error) {
+	return exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
 }
 
 func (hostSystem) local(ip string) bool {

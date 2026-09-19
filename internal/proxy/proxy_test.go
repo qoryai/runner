@@ -2,6 +2,8 @@ package proxy_test
 
 import (
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"io"
 	"net"
 	"net/http"
@@ -298,5 +300,112 @@ func TestRequireServesOnlyConnectionsThatOpenWithTheToken(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Errorf("opened with %q: nobody was told", open)
 		}
+	}
+}
+
+// TestTerminateSetsTheCredentialAndHoldsThePaths pins termination: to a host a
+// credential is for, the proxy answers with the run's authority, sets the token on a
+// path the credential covers and nowhere else, denies the rest under enforce, records
+// every request, and leaves every other host a tunnel it does not read.
+func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
+	var mu sync.Mutex
+	got := map[string]string{}
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got[r.URL.Path] = r.Header.Get("Authorization") + "|" + r.Host
+		mu.Unlock()
+		if r.URL.Path == "/acme/shop/expired" {
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+		io.WriteString(w, "from the origin")
+	}))
+	defer origin.Close()
+	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+
+	var decisions []proxy.Decision
+	p, err := proxy.Listen("", policy.Enforce, []string{host}, func(d proxy.Decision) { mu.Lock(); decisions = append(decisions, d); mu.Unlock() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	ca, err := proxy.NewCA("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(origin.Certificate())
+	p.TrustUpstream(roots)
+	rejected := 0
+	p.Terminate(ca, []proxy.Credential{{
+		Name: "product", Hosts: []string{host}, Scheme: "basic", Username: "x-access-token", Paths: []string{"/acme/shop/*", "/graphql"},
+		Token: func() string { return "the-token" }, Rejected: func() { rejected++ },
+	}}, nil)
+
+	trusted := x509.NewCertPool()
+	trusted.AppendCertsFromPEM(ca.PEM())
+	proxyURL, _ := url.Parse(p.URL())
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
+	get := func(path string, header ...string) (int, string) {
+		req, _ := http.NewRequest("GET", "https://"+net.JoinHostPort(host, port)+path, nil)
+		req.Header.Set("Authorization", "Bearer the-sessions-placeholder")
+		if len(header) == 2 {
+			if header[0] == "Host" {
+				req.Host = header[1]
+			} else {
+				req.Header.Set(header[0], header[1])
+			}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:the-token"))
+	if code, body := get("/acme/shop/pulls?state=open"); code != 200 || body != "from the origin" {
+		t.Errorf("a covered path: %d %q", code, body)
+	}
+	if code, body := get("/other-org/repo"); code != 403 || !strings.Contains(body, "no path rule") {
+		t.Errorf("another organization's path: %d %q", code, body)
+	}
+	for _, two := range []string{"/acme/shop/..%2f..%2fother-org/repo", "/acme/shop//x", "/acme/shop/%2e%2e/x"} {
+		if code, _ := get(two); code != 403 {
+			t.Errorf("%s: %d, want the wall's refusal", two, code)
+		}
+	}
+	if code, _ := get("/acme/shop/fronted", "Host", "another.example"); code != 200 {
+		t.Errorf("a request naming another Host: %d", code)
+	}
+	get("/acme/shop/expired")
+	mu.Lock()
+	defer mu.Unlock()
+	if got["/acme/shop/pulls"] != want+"|"+net.JoinHostPort(host, port) {
+		t.Errorf("the origin saw %q on a covered path", got["/acme/shop/pulls"])
+	}
+	if _, reached := got["/other-org/repo"]; reached {
+		t.Error("a denied path reached the origin")
+	}
+	if !strings.HasSuffix(got["/acme/shop/fronted"], "|"+net.JoinHostPort(host, port)) {
+		t.Errorf("the origin was asked for the host %q", got["/acme/shop/fronted"])
+	}
+	if rejected != 1 {
+		t.Errorf("the credential heard of %d rejections, want 1", rejected)
+	}
+	var first proxy.Decision
+	for _, d := range decisions {
+		if d.Method == "CONNECT" {
+			t.Errorf("a terminated connection was recorded as a tunnel: %+v", d)
+		}
+		if d.Path == "/acme/shop/pulls" {
+			first = d
+		}
+		if strings.Contains(d.Path, "?") {
+			t.Errorf("a query in the record: %+v", d)
+		}
+	}
+	if first.Method != "HTTPS" || first.RequestMethod != "GET" || first.Credential != "product" || first.PathRule != "/acme/shop/*" || !first.Allowed {
+		t.Errorf("the covered request was recorded as %+v", first)
 	}
 }

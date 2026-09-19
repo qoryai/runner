@@ -21,6 +21,27 @@ release may change what an existing document does, and says so under Upgrading.
 - `session.ReadPolicy` and `Policy.Under`: a command reads a run's own policy file and
   puts it under the machine's, which it can only narrow.
 
+- Credentials the session never holds. `Spec.Credentials` are the machine's: a token
+  from a variable of the runner's environment, from a file, or from an adapter, a
+  program of the machine's that knows one kind of host and prints, as
+  `credential.schema.json`, the token, its expiry, and the hosts, the scheme and the
+  paths it is for. A policy's new `credentials` selects among them by name, with an
+  argument for an adapter, and defines none. Behind a wall the proxy sets each on the
+  requests to its hosts; the enclosure gets placeholders, never a token. An adapter is
+  asked again before its token expires and when a host answers 401.
+- Path rules: `egress.paths` in the policy, and the `paths` of a credential. Of a host
+  with paths the run reaches those and no other, so a repository's credential does not
+  open another organization's on the same host. A path that could be read two ways is
+  denied in either mode.
+- TLS termination, for the hosts a credential is for and the hosts with path rules, and
+  no other: the proxy answers as the host with a certificate of an authority made for
+  the run, whose key never leaves the runner's memory. `wall.Launch.CA` gives a wall the
+  certificate; the Docker adapter shows the enclosure one bundle, the image's own
+  authorities and the run's, and sets `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
+  `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`, or `Docker.CAEnv`.
+  `ai.qory.run.policy_applied` lists `credentials`, `paths` and the `terminated` hosts,
+  and on a terminated host `ai.qory.run.egress` is one event per request with
+  `request_method`, `path`, `path_rule` and `credential`.
 - `session.Resend`: completes and delivers the record of a run that is over, for a
   job's last step after a runner that died or a receiver that was away. The run
   directory gains `delivered.log`, a line per accepted batch written as the answer
@@ -42,6 +63,9 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Changed
 
+- The contract's limit that the proxy never reads a TLS connection now has its one
+  exception, stated in every run's record: a terminated host. A run whose policy selects
+  no credential and has no path rule is as before, with no authority made at all.
 - Behind a wall the proxy serves the run's relay alone. Its address was reached by
   other containers of the same engine, on a Linux host, and by other processes of the
   machine; the run's policy bounded what they did with it. Now the relay opens every

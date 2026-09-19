@@ -244,7 +244,6 @@ wall:
   transport through the relay.
 - Git inside the container when the checkout is a git worktree, whose repository data
   lies outside the mounts, unless the run lists that directory among them.
-- Rules on URL paths. The proxy sees a host and a port, never inside a TLS connection.
 
 ## Layout
 

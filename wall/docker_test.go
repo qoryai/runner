@@ -50,6 +50,10 @@ func (r *recorder) run(_ context.Context, argv []string) ([]byte, error) {
 	}
 	return nil, nil
 }
+func (r *recorder) output(_ context.Context, argv []string) ([]byte, error) {
+	r.lines = append(r.lines, words(argv))
+	return nil, errors.New("no such file")
+}
 func (r *recorder) local(string) bool        { return r.local_ }
 func (r *recorder) tempDir() (string, error) { return r.t.TempDir(), nil }
 func (r *recorder) ids() (int, int)          { return r.uid, 1000 }

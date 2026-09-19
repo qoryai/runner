@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/descriptor"
 	"github.com/qoryai/runner/internal/event"
 	"github.com/qoryai/runner/internal/policy"
@@ -69,6 +71,11 @@ type Spec struct {
 	// path: the checkout around Dir, a composed home outside it. The runner adds the
 	// run directory, read-only. Without a Wall they mean nothing.
 	Mounts []wall.Mount
+	// Credentials are the credentials this machine defines; the run's policy selects
+	// among them by name. A selected credential, like a path rule, needs a Wall: the
+	// proxy then terminates TLS for the hosts concerned, with an authority made for the
+	// run whose certificate the enclosure is given to trust.
+	Credentials []Credential
 	// Declared is the egress the harness declared, nil when nothing was.
 	Declared []string
 	// RunsDir holds the run directories; empty means Dir/.qory/runs.
@@ -216,6 +223,27 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	allow := pol.Narrow(spec.Declared)
+	if (len(pol.Policy.Credentials) > 0 || len(pol.Policy.Egress.Paths) > 0) && spec.Wall == nil {
+		files.Close(ctx)
+		return nil, errors.New("the policy selects credentials or has path rules, which need a wall: without one a program that ignores the proxy is bound by neither")
+	}
+	defs := make([]credential.Definition, len(spec.Credentials))
+	for i, c := range spec.Credentials {
+		defs[i] = credential.Definition(c)
+	}
+	held, err := credential.Resolve(ctx, defs, pol.Policy.Credentials, pol.Policy.Egress.Mode, allow, spec.Report)
+	if err != nil {
+		files.Close(ctx)
+		return nil, err
+	}
+	defer held.Close()
+	for _, name := range held.Placeholders {
+		if slices.ContainsFunc(spec.Env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
+			files.Close(ctx)
+			return nil, fmt.Errorf("%s is a placeholder of a credential the runner holds outside the enclosure, and the run passes a value for it inside", name)
+		}
+	}
 	unlock, err := lock(dir)
 	if err != nil {
 		files.Close(ctx)
@@ -268,13 +296,19 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		bind = enclosure.ProxyAddr()
 	}
 
-	allow := pol.Narrow(spec.Declared)
 	px, err := proxy.Listen(bind, pol.Policy.Egress.Mode, allow, func(d proxy.Decision) {
 		decision := "denied"
 		if d.Allowed {
 			decision = "allowed"
 		}
-		write(event.RunEgress, map[string]any{"host": d.Host, "port": d.Port, "method": d.Method, "decision": decision, "mode": string(pol.Policy.Egress.Mode), "rule": d.Rule})
+		egress := map[string]any{"host": d.Host, "port": d.Port, "method": d.Method, "decision": decision, "mode": string(pol.Policy.Egress.Mode), "rule": d.Rule}
+		if d.Path != "" {
+			egress["request_method"], egress["path"], egress["path_rule"] = d.RequestMethod, d.Path, d.PathRule
+		}
+		if d.Credential != "" {
+			egress["credential"] = d.Credential
+		}
+		write(event.RunEgress, egress)
 	})
 	if err != nil {
 		sinks.Close(ctx)
@@ -285,6 +319,20 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// The proxy serves something that is not on this machine, so this machine's own
 		// addresses are not its to reach.
 		px.Guard(pol.Policy.Egress.Allow)
+	}
+	var authority []byte
+	if len(held.Uses) > 0 || len(pol.Policy.Egress.Paths) > 0 {
+		ca, err := proxy.NewCA(runID)
+		if err != nil {
+			sinks.Close(ctx)
+			return nil, err
+		}
+		uses := make([]proxy.Credential, len(held.Uses))
+		for i, u := range held.Uses {
+			uses[i] = proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths, Token: u.Token, Rejected: u.Rejected}
+		}
+		px.Terminate(ca, uses, pol.Policy.Egress.Paths)
+		authority = ca.PEM()
 	}
 	// Behind a wall the proxy listens where other containers of the engine, or other
 	// processes of the machine, may reach it. It serves the run's relay alone.
@@ -331,7 +379,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if enclosure != nil {
 		launch, err = enclosure.Wrap(ctx, wall.Launch{
 			Command: spec.Command, Args: args, Dir: spec.Dir, Interactive: spec.Interactive,
-			Env:   environment(spec.Env, []string{EnvRunID + "=" + runID}),
+			Env:   environment(spec.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders)),
+			CA:    authority,
 			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits, ProxyToken: token,
 		})
 		if err != nil {
@@ -359,6 +408,22 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	if spec.Declared != nil {
 		applied["declared"] = spec.Declared
+	}
+	if len(pol.Policy.Egress.Paths) > 0 {
+		applied["paths"] = pol.Policy.Egress.Paths
+	}
+	if len(held.Uses) > 0 {
+		uses := make([]map[string]any, len(held.Uses))
+		for i, u := range held.Uses {
+			uses[i] = map[string]any{"name": u.Name, "hosts": u.Hosts, "scheme": u.Scheme}
+			if u.Paths != nil {
+				uses[i]["paths"] = u.Paths
+			}
+		}
+		applied["credentials"] = uses
+	}
+	if hosts := px.Terminated(); len(hosts) > 0 {
+		applied["terminated"] = hosts
 	}
 	write(event.PolicyApplied, applied)
 
@@ -451,6 +516,16 @@ func withDefaults(spec Spec) Spec {
 		spec.RunnerVersion = "dev"
 	}
 	return spec
+}
+
+// placeholders are the variables a program wants set before it starts, with a value
+// that is no credential.
+func placeholders(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = n + "=" + credential.Placeholder
+	}
+	return out
 }
 
 // environment is the session's environment: base with the runner's variables set,
