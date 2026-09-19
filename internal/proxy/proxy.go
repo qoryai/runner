@@ -17,12 +17,15 @@
 // proxy like everything else, decided and recorded, when the policy names it, in either
 // mode. Without the guard the way around a wall is through the proxy.
 //
-// The proxy sees host names and ports and never the content of a TLS connection: a
+// Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
+// TLS itself, reads each request's path and sets a credential on it. For every other
+// host the proxy sees host names and ports and never the content of a TLS connection: a
 // tunnel is a blind relay once established. Only a proxy-aware program is seen.
 package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -47,6 +50,10 @@ type Decision struct {
 	Allowed bool
 	// Rule is the allow entry that matched, or empty when none did.
 	Rule string
+	// RequestMethod, Path and PathRule are a request's inside a connection the proxy
+	// terminates, where Method is "HTTPS", or a plain request's to a host with path
+	// rules; Credential names the credential the proxy set on it, if it set one.
+	RequestMethod, Path, PathRule, Credential string
 }
 
 // Proxy is a listening proxy.
@@ -59,6 +66,15 @@ type Proxy struct {
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error)
 	wg      sync.WaitGroup
 	guarded atomic.Bool
+	// token, when set, is what every connection must open with; refused is told of one
+	// that did not.
+	token   atomic.Pointer[string]
+	refused func()
+	// term, when set, says which hosts the proxy terminates TLS for.
+	term        *terminator
+	up          http.RoundTripper
+	upOnce      sync.Once
+	upstreamTLS *tls.Config
 	// opened are the hosts a guarded proxy reaches on this machine.
 	opened []string
 }
@@ -86,6 +102,7 @@ func Listen(addr string, mode policy.Mode, allow []string, observe func(Decision
 		return nil, err
 	}
 	p := &Proxy{mode: mode, allow: allow, observe: observe, ln: ln}
+	gate := &gate{Listener: ln, p: p}
 	// The guard checks the address a name resolved to, at the moment of the connection,
 	// so a name that resolves to this machine is refused like the address itself.
 	d := &net.Dialer{Timeout: 30 * time.Second, ControlContext: func(ctx context.Context, _, address string, _ syscall.RawConn) error {
@@ -106,7 +123,7 @@ func Listen(addr string, mode policy.Mode, allow []string, observe func(Decision
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		p.srv.Serve(ln)
+		p.srv.Serve(gate)
 	}()
 	return p, nil
 }
@@ -230,6 +247,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := p.decide("HTTP", host, port)
+	if d.Allowed {
+		if clean, rule, ok := p.term.plainPath(d.Host, r.URL.EscapedPath()); clean != "" {
+			d.RequestMethod, d.Path, d.PathRule, d.Allowed = r.Method, clean, rule, ok
+		}
+	}
 	p.observe(d)
 	if !d.Allowed {
 		deny(w, d, p.mode)
@@ -269,9 +291,33 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := p.decide(http.MethodConnect, host, port)
-	p.observe(d)
+	terminated := d.Allowed && p.term.covers(d.Host)
+	if !terminated {
+		// A terminated connection is recorded request by request instead.
+		p.observe(d)
+	}
 	if !d.Allowed {
 		deny(w, d, p.mode)
+		return
+	}
+	if terminated {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "no hijack", http.StatusInternalServerError)
+			return
+		}
+		client, buf, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		if _, err := buf.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err == nil {
+			err = buf.Flush()
+		}
+		if err != nil || buf.Reader.Buffered() > 0 {
+			client.Close()
+			return
+		}
+		p.term.serve(context.WithoutCancel(r.Context()), client, d, net.JoinHostPort(host, portText))
 		return
 	}
 	upstream, err := p.dial(p.dialContext(r.Context(), d), "tcp", net.JoinHostPort(host, portText))

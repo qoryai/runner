@@ -49,6 +49,16 @@ type report struct {
 	HostFile       bool              `json:"host_file"`
 	SettingsWrite  string            `json:"settings_write"`
 	Namespaces     map[string]string `json:"namespaces"`
+	PathDenied     int               `json:"path_denied"`
+	TLSDenied      int               `json:"tls_denied"`
+	TLSDeniedErr   string            `json:"tls_denied_err"`
+	TLSAllowed     int               `json:"tls_allowed"`
+	TLSAllowedErr  string            `json:"tls_allowed_err"`
+	Placeholder    string            `json:"placeholder"`
+	TokenSeen      []string          `json:"token_seen"`
+	Bundle         string            `json:"bundle"`
+	BundleCerts    int               `json:"bundle_certs"`
+	BundleKeys     int               `json:"bundle_keys"`
 	Hook           string            `json:"hook"`
 	Terminal       bool              `json:"terminal"`
 }
@@ -75,6 +85,27 @@ func probe(args []string) int {
 	r.Denied, r.DeniedErr = get(os.Getenv("PROBE_DENIED"))
 	r.OwnViaProxy, _ = get(os.Getenv("PROBE_OWN"))
 	r.MetaViaProxy, _ = get("http://169.254.169.254/latest/meta-data/")
+	// A host held to paths, asked for another; then the host a credential is for, which
+	// the proxy answers as itself: a path outside the credential's is the proxy's own
+	// 403, and a path inside it goes upstream, where there is nothing, with the
+	// credential the record names. Both are verified against the bundle the wall gave.
+	r.PathDenied, _ = get(os.Getenv("PROBE_ALLOWED") + "outside-the-paths")
+	r.TLSDenied, r.TLSDeniedErr = get("https://" + credentialHost + "/outside-the-paths")
+	r.TLSAllowed, r.TLSAllowedErr = get("https://" + credentialHost + credentialPath)
+	r.Placeholder = os.Getenv(placeholderVar)
+	for _, kv := range os.Environ() {
+		if name, value, _ := strings.Cut(kv, "="); strings.Contains(value, tokenMark) {
+			r.TokenSeen = append(r.TokenSeen, name)
+		}
+	}
+	r.Bundle = os.Getenv("SSL_CERT_FILE")
+	if b, err := os.ReadFile(r.Bundle); err == nil {
+		r.BundleCerts = strings.Count(string(b), "BEGIN CERTIFICATE")
+		r.BundleKeys = strings.Count(string(b), "PRIVATE KEY")
+		if strings.Contains(string(b), tokenMark) {
+			r.TokenSeen = append(r.TokenSeen, r.Bundle)
+		}
+	}
 	// The first address of each network the probe is on is where an engine puts its
 	// host, when it puts it anywhere.
 	if addrs, err := net.InterfaceAddrs(); err == nil {

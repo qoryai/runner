@@ -80,6 +80,14 @@ func NewEmitter(runID string, now func() time.Time) *Emitter {
 	return &Emitter{runID: runID, now: now}
 }
 
+// NewEmitterAfter returns an emitter that goes on after seq: whoever completes the
+// record of a run its runner left numbers on from the last event in the file.
+func NewEmitterAfter(runID string, seq uint64, now func() time.Time) *Emitter {
+	e := NewEmitter(runID, now)
+	e.seq = seq
+	return e
+}
+
 // RunID is the run the emitter numbers.
 func (e *Emitter) RunID() string { return e.runID }
 

@@ -4,6 +4,116 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [Unreleased]
+
+### Added
+
+- `session.Spec.Timeout`: a time limit for the runtime. At the limit it is stopped as
+  the context ending stops it, `ai.qory.run.exited` carries `reason: timeout`, and
+  `Result.TimedOut` is set.
+- `runtimes.Runtime`: the boundary between the runner and the program it runs, as
+  `wall.Wall` is for an enclosure. A runtime says how a launch is prepared, what its
+  records mean and how it is asked to leave; the session package knows no program.
+  `runtimes.Described` is a runtime written as a descriptor, `runtimes.Bare` a program
+  the runner runs and does not read, `runtimes/claude` Claude Code, and
+  `runtimes/catalog.Lookup` resolves a name: the machine's descriptor, the contract's,
+  or bare, so any program runs behind a wall. `runtimes/runtimetest` is the conformance
+  suite, `Conforms` and `Replays`.
+- The descriptor's `stop` section, `signal` and `grace`: how a runtime is asked to
+  leave. A run's own `StopSignal` and `StopGrace` override it.
+- `session.Spec.StopSignal` and `Spec.StopGrace`: how the runner stops a runtime, at the
+  limit or when its context ends. The signal is one of SIGTERM, SIGINT, SIGHUP, SIGQUIT,
+  SIGUSR1 and SIGUSR2, SIGTERM unless named, since a runtime may close its session on one
+  and drop it on another; the grace is the time until SIGKILL, ten seconds unless named.
+  `session.CheckStopSignal` is the check.
+- `session.Spec.Labels`: the caller's own names for the run, reported as `labels` in
+  `ai.qory.run.started` and nowhere else. At most 16, keys of `a-z`, `0-9`, `_`, `.`
+  and `-`, values of at most 256 bytes.
+- `session.Spec.Limits` and `wall.Limits`: processors, memory, processes and the size
+  of `/dev/shm` for the agent's container, as `--cpus`, `--memory`, `--pids-limit` and
+  `--shm-size` with the Docker adapter. The relay gets none.
+- `session.ReadPolicy` and `Policy.Under`: a command reads a run's own policy file and
+  puts it under the machine's, which it can only narrow.
+
+- Credentials the session never holds. `Spec.Credentials` are the machine's: a token
+  from a variable of the runner's environment, from a file, or from an adapter, a
+  program of the machine's that knows one kind of host and prints, as
+  `credential.schema.json`, the token, its expiry, and the hosts, the scheme and the
+  paths it is for. A policy's new `credentials` selects among them by name, with an
+  argument for an adapter, and defines none. Behind a wall the proxy sets each on the
+  requests to its hosts; the enclosure gets placeholders, never a token. An adapter is
+  asked again before its token expires and when a host answers 401.
+- Path rules: `egress.paths` in the policy, and the `paths` of a credential. Of a host
+  with paths the run reaches those and no other, so a repository's credential does not
+  open another organization's on the same host. A path that could be read two ways is
+  denied in either mode.
+- TLS termination, for the hosts a credential is for and the hosts with path rules, and
+  no other: the proxy answers as the host with a certificate of an authority made for
+  the run, whose key never leaves the runner's memory. `wall.Launch.CA` gives a wall the
+  certificate; the Docker adapter shows the enclosure one bundle, the image's own
+  authorities and the run's, and sets `SSL_CERT_FILE`, `GIT_SSL_CAINFO`,
+  `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`, or `Docker.CAEnv`.
+  `ai.qory.run.policy_applied` lists `credentials`, `paths` and the `terminated` hosts,
+  and on a terminated host `ai.qory.run.egress` is one event per request with
+  `request_method`, `path`, `path_rule` and `credential`.
+- Work in the background, in the Claude Code descriptor: `ai.qory.session.turn_finished`
+  and `ai.qory.session.subagent_finished` carry `background_tasks`, the runtime's own
+  list of what is still running, each with its id, type, status, description, and a
+  shell's command or a subagent's type. A background command's start was already a
+  `tool_started` with `run_in_background` in its input. The runtime reports no exit
+  status and no duration for such a task, so the record has neither.
+- The conformance suite checks, from inside the enclosure, that a host held to paths is
+  held to them, that a terminated host is answered with the run's authority and held to
+  its credential's paths, that the credential is set outside, and that no token and no
+  key is inside: not in the environment, not in the bundle, not in the record.
+- `session.Resend`: completes and delivers the record of a run that is over, for a
+  job's last step after a runner that died or a receiver that was away. The run
+  directory gains `delivered.log`, a line per accepted batch written as the answer
+  comes, and `lock`, held while the runner lives; a run that still goes is
+  `ErrRunning`. A record with no `ai.qory.run.exited` gets one with `reason:
+  runner_lost`, and the events no accepted batch named are posted in order.
+- `wall.Reaper`, and `Docker.Reap`: removes the containers and networks that carry a
+  run's label, what a runner that died left behind. `Resend` asks for it.
+
+### Requirements
+
+- The Docker adapter is tested on Linux with Docker Engine 28, in CI, and with Docker
+  Engine 29 on OrbStack; the conformance suite passes on both. It may work on an earlier
+  engine, and that is not tested. It depends on the bridge option
+  `com.docker.network.bridge.inhibit_ipv4`, which is in the engine's source at 24.0 and
+  was not looked for before it, and on the `host-gateway` address. On an engine nobody
+  has tried, run the suite: `go test ./wall/walltest` with `QORY_WALL_HELPER` naming its
+  Linux build.
+
+### Changed
+
+- **Breaking for a caller in Go.** `session.Spec.Runtime` is a `runtimes.Runtime`, not a
+  name, and `Spec.Descriptors` is gone: `catalog.Lookup(name, dir)` gives the runtime a
+  name and a descriptor directory gave before. A nil `Runtime` is a bare one named after
+  the command. A name nothing describes was an error and is now a bare runtime, and
+  `runtime_version` in `ai.qory.run.started` is absent for one.
+- The contract's limit that the proxy never reads a TLS connection now has its one
+  exception, stated in every run's record: a terminated host. A run whose policy selects
+  no credential and has no path rule is as before, with no authority made at all.
+- Behind a wall the proxy serves the run's relay alone. Its address was reached by
+  other containers of the same engine, on a Linux host, and by other processes of the
+  machine; the run's policy bounded what they did with it. Now the relay opens every
+  connection it forwards with a token of the run's, `Launch.ProxyToken`, given to the
+  relay through a file and to nothing inside the enclosure, and the proxy closes
+  unanswered whatever opens otherwise. An adapter of your own passes the token to its
+  relay, which is `wall.Relay` with `QORY_RELAY_TOKEN` in its environment.
+- A `Spec.RunID` that is not a UUID in the canonical lower-case form is refused. It
+  went unchecked into the run directory's path and into the events' `subject`, which
+  the envelope's schema holds to a UUID.
+- The Docker adapter refuses a mount that is a socket, or a directory holding a
+  container runtime's socket.
+
+### Fixed
+
+- The contract's event table listed `path` in `ai.qory.run.policy_applied`, which no
+  schema and no runner has had since the policy became a value, and said every session
+  event may carry `agent_id`, which `ai.qory.session.result` cannot.
+
 ## [0.2.0] - 2026-09-17
 
 ### Added
@@ -77,4 +187,5 @@ release may change what an existing document does, and says so under Upgrading.
   It names the policy's `egress.allow` grammar as the one definition of a declared host,
   which the harness contract copies.
 
+[Unreleased]: https://github.com/qoryai/runner/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/qoryai/runner/compare/v0.1.0...v0.2.0

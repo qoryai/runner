@@ -31,8 +31,8 @@ directory, `v2`, never a change in place.
 The runner's duties, in the order that matters when they conflict:
 
 1. **Policy.** The runner reads one policy document, pinned for the run, that can only
-   narrow what the binary allows: the egress mode and the allow list now, mounts and
-   credentials later. A policy that cannot be read means no run. No policy means observe
+   narrow what the binary allows: the egress mode, the allow list, the paths of a host,
+   and which of the machine's credentials the run may use. A policy that cannot be read means no run. No policy means observe
    everything and deny nothing. Nothing in a policy grants; a stale or failed policy
    degrades toward more restrictive, never toward more permissive.
 2. **Egress.** The runner owns an HTTP proxy, on loopback or, behind a wall, on the one
@@ -43,9 +43,10 @@ The runner's duties, in the order that matters when they conflict:
    the allow list is denied. A denied attempt is recorded and the session continues; a
    denial never ends a run.
 3. **Credentials.** The session holds none of the runner's. On a developer machine the
-   session runs with the developer's own environment. Under a node runner, the runner
-   holds the run's git and model credentials in memory and the session sees a workspace
-   and a local model endpoint; that mode is the node layer's and is not in this version.
+   session runs with the developer's own environment. Behind a wall the runner holds the
+   credentials the run's policy selects, in memory and outside the enclosure, and its
+   proxy sets each on the requests to the hosts it is for (§Credentials): the session
+   reaches a code host and a model endpoint as itself and never reads what it is.
 4. **Liveness.** A heartbeat while the session runs; the exit as the result.
 5. **Reporting.** The session's terminal bytes as log chunks, the runner's observations
    as events, the runtime's own output mapped to session events by a descriptor. Every
@@ -60,8 +61,19 @@ The runner's duties, in the order that matters when they conflict:
 
 Stated so a receiver reads the record for what it is.
 
-- The proxy sees host names and ports, never the content of a TLS connection. A
-  `CONNECT` tunnel is a blind relay once established.
+- The proxy sees host names and ports, never the content of a TLS connection: a
+  `CONNECT` tunnel is a blind relay once established. The exception is stated in the
+  run's record: behind a wall, for a host the run holds a credential for or has path
+  rules for, the proxy ends the session's TLS itself and reads each request's method and
+  path. `ai.qory.run.policy_applied` lists those hosts as `terminated`, and no other
+  host is read.
+- On a terminated host the session's side of the connection is HTTP/1.1, so a protocol
+  that needs HTTP/2 end to end, gRPC say, does not work there, and a program that pins
+  the host's own certificate refuses the run's. A host that sends a request's headers
+  back, an echo service, hands the session the credential the proxy set. A path rule
+  reads a path and nothing else: where a host takes every request on one path, a
+  GraphQL endpoint say, the path is reachable or it is not, and what the request may
+  touch behind it is bounded by the credential's own scope, not by the runner.
 - Only proxy-aware programs are seen. The agent CLIs, git over HTTPS, curl, the package
   managers and the language runtimes honour the proxy variables; SSH does not, and a
   program that ignores the variables is not seen. Without a wall, enforce mode is
@@ -77,9 +89,8 @@ Stated so a receiver reads the record for what it is.
   both; the run's policy can only be held at the proxy. Neither tells two accounts apart
   on one allowed host: a code host, an object store and a model endpoint each carry data
   to whoever owns the account the request names.
-- Behind a wall the model credential is in the enclosure's environment, because the
-  runtime needs it and the run passes it. Keeping it outside, injected by the proxy, is
-  not in this version. What is handed in is the agent's: a checkout that keeps a token
+- A credential the run passes into the enclosure's environment is the agent's; one the
+  policy selects stays outside (§Credentials). What is handed in is the agent's: a checkout that keeps a token
   in the repository's configuration hands the token in with the workspace. The run
   directory is shown read-only, so the agent cannot change `events.jsonl`; when it lies
   inside the workspace the agent can still rename the directory above it, which moves
@@ -88,9 +99,12 @@ Stated so a receiver reads the record for what it is.
   runtime's status, except that `125` is the engine failing to start the container,
   `126` and `127` the program not being startable in the image, and a runtime killed by
   a signal arrives as `128` plus the signal's number, with no `signal` named.
-- The proxy behind a wall listens where the enclosure reaches it, which on a Linux host
-  is an address other containers of the same engine reach too. What they send is decided
-  by the run's policy and the guard, and lands in the run's record.
+- The proxy behind a wall listens where the enclosure reaches it, which other
+  containers of the same engine, or other processes of the machine, reach too. It
+  serves none of them: the run has a token only its relay is given, every connection
+  the relay forwards opens with `QORY-RELAY`, a space, the token and a newline before
+  the first byte of HTTP, and a connection that opens otherwise is closed unanswered
+  and reported once. The token is never inside the enclosure.
 - On an engine inside a virtual machine, a Mac's say, the hook socket does not cross the
   file share, so a walled run there has no session events from hooks; the log, the
   egress record and the structured output are unaffected. The forwarder's network
@@ -129,10 +143,11 @@ One run, on a developer machine, with a webhook configured:
    `NO_PROXY=localhost,127.0.0.1,::1` so a local MCP server or model endpoint still
    answers. It opens the local socket and sets `QORY_RUN_SOCKET` to its path and
    `QORY_RUN_ID` to the run id. Nothing else of the runner's enters the environment.
-6. It installs the runtime descriptor's hooks: its forwarder as a command hook for each
-   event the descriptor lists, added to a copy of the settings file the launch passes,
-   written as `settings.json` in the run directory and named in its place. The composed
-   home is not modified.
+6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
+   the runner's forwarder as a command hook for each event the runtime lists. For Claude
+   Code that is a copy of the settings file the launch passes, written as
+   `settings.json` in the run directory and named in its place. What is prepared goes
+   into the run directory; the composed home is not modified.
 7. It emits `ai.qory.run.started` and `ai.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when interactive, on pipes otherwise.
 8. While the program runs: every chunk of output is one `ai.qory.run.log`; every
@@ -142,6 +157,27 @@ One run, on a developer machine, with a webhook configured:
    event is still read, emits `ai.qory.run.exited`, gives the sinks fifteen seconds to
    flush, reports what the webhook did not accept, and returns the program's exit
    status. A runtime killed by a signal exits as `-1` with the signal named.
+
+A run may have a time limit. When the runtime still runs at the limit the runner stops
+it, and `ai.qory.run.exited` carries `reason: timeout` with the state `failed`; step 9
+is otherwise the same. A denied connection
+never ends a run; the limit is the one thing of the runner's that does.
+
+The runner stops a runtime the same way at the limit and when its own context ends: a
+signal that asks the runtime to leave, then SIGKILL after a grace. The signal is one of
+SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2, since runtimes differ in what
+each means: one closes its session on SIGINT and drops it on SIGTERM, another the other
+way round. So the runtime says which and how long (§The runtime), the run may name
+others over it, and with neither it is SIGTERM and ten seconds. Behind a wall the
+enclosure passes the same signal on to the runtime inside.
+
+The run id is the runner's own, a UUID version 7, unless the caller already holds one: a
+caller's id is a UUID in the canonical lower-case form, since it is every event's
+`subject` and names the run directory, and anything else is no run. What else the caller
+knows the run by, a key in its queue, a repository, an issue, goes in `labels` on
+`ai.qory.run.started`: at most 16, a key of 1 to 64 of `a-z`, `0-9`, `_`, `.` and `-`, a
+value of at most 256 bytes. The runner copies them and reads nothing into them, and no
+other event repeats them: a receiver joins on `subject`.
 
 Behind a wall, three steps differ and no event does. Before step 5 the runner asks the
 wall to prepare the enclosure and listens where the enclosure says, not on loopback.
@@ -177,6 +213,8 @@ egress:
 | `version` | `1`. A runner refuses a version it does not read, naming it |
 | `egress.mode` | `observe`: every connection is allowed and recorded. `enforce`: a connection to a host outside `allow` is denied and recorded |
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. Absent is empty, and `enforce` with an empty list reaches nothing |
+| `egress.paths` | by host, in `allow`'s grammar, the paths the session may ask of it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. An empty list is no path at all |
+| `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say. A policy defines none (§Credentials) |
 
 **Narrowing.** The harness compose reports the hosts its modules declared. The command
 hands that list to the runner, and the effective allow list is the declared entries the
@@ -195,6 +233,103 @@ a plain request is the authority of its absolute-form target, never its `Host` h
 Host names are compared lower-case; an IP literal matches only an identical entry. The
 first entry that matches is the rule reported. A denial is a `403 Forbidden` with a
 one-line text body naming the host and the mode; a tunnel is never opened for it.
+
+**Matching a path.** On a terminated host every request is decided, by the policy's
+paths for the host and by the paths of the credential that is for it, and it passes
+when every list that exists has an entry that matches. The comparison is exact, case
+included: on a host that ignores case this denies a spelling the host would have
+taken, never the reverse, so whoever writes a path writes it as the host does. A path
+that could be read two ways is denied in either mode, with the rule
+`wall:ambiguous-path`: an encoded slash, backslash, dot or percent sign, a backslash, an
+empty segment, a dot segment. Under `observe` a path no entry matches is recorded as
+denied and let through, as a host is, but the credential is set only where its own paths
+match: observing is no reason to hand a token to a path nobody configured. The host
+asked of upstream is the one the connection was opened to and decided on, whatever
+`Host` a request names. A denial is a `403` naming the method, the host and the path.
+A plain request is held to the same paths and never carries a credential.
+
+*Reading without writing.* Paths say what a run does on a host as well as where. git
+over HTTPS asks three paths of a repository, on any host that serves it:
+`/<repo>.git/info/refs`, then `/<repo>.git/git-upload-pack` for a fetch or
+`/<repo>.git/git-receive-pack` for a push. A run given the first two and not the third
+clones and fetches, with the credential set, and its push is refused before it leaves
+the machine: git reports `HTTP 403` and fails, the record holds the denied `POST`, and
+nothing reaches the repository, whatever the token itself may do. Rules match the path
+and never the query, so the `info/refs` a push asks first is allowed; it lists what a
+fetch already saw.
+
+## Credentials
+
+A credential is a token the runner holds for the session and the session never holds.
+The machine defines credentials; the run's policy selects among them by name and
+defines none, so whoever writes a policy chooses among the programs the machine's owner
+installed and never names one. They need a wall: without one a program that ignores the
+proxy is bound by nothing here.
+
+A definition says where the token comes from, exactly one of:
+
+| Source | The token is |
+|---|---|
+| `env` | a variable of the runner's own environment, read once when the run starts |
+| `file` | a file's content, read again whenever it is used, so whatever rotates it tells no one |
+| `adapter` | what a program of the machine's prints |
+
+**An adapter** knows one kind of host: a source code host, an artifact store. The runner
+knows none, so nothing in it names one. The runner starts the adapter outside the
+enclosure, with its own environment, a minute to answer, and `${argument}` in its
+arguments replaced by the argument the policy gives, which the definition's pattern
+must match whole: one word of the command line, never a shell's. It prints one
+document, `credential.schema.json`, and exits 0; anything else is no run, and the line it
+wrote to standard error is the reason given.
+
+```json
+{"version": 1, "token": "…", "expires_at": "2026-09-19T14:00:00Z",
+ "apply": [
+   {"hosts": ["git.example.com"], "scheme": "basic", "username": "x-access-token",
+    "paths": ["/acme/shop.git/*", "/acme/shop/*"]},
+   {"hosts": ["api.git.example.com"], "scheme": "bearer",
+    "paths": ["/repos/acme/shop", "/repos/acme/shop/*"]}],
+ "placeholders": ["GIT_HOST_TOKEN"]}
+```
+
+The adapter says how its token is used, because hosts differ in it: which hosts, which
+scheme, and which paths make up what the run asked for. The schemes are a closed set,
+`bearer`, `basic` with a `username`, `header` with a header's name; an adapter chooses
+among what the runner does and adds nothing to it. Of a host with `paths` the run
+reaches those and no other, so one repository's credential does not open another
+organization's on the same host; a path the adapter leaves out, the host's GraphQL
+endpoint say, is not reached. A definition may name `hosts` and `paths` of its own for
+an adapter: the most it may claim. For `env` and `file`, which have nobody to say it,
+the definition's `hosts`, scheme and `paths` are the use itself.
+
+Before the run starts every selected credential is resolved, and what cannot hold is
+no run: a name the machine does not define, an argument it does not provide for, a host
+two credentials claim, a claim above the definition's, and under `enforce` a host the
+run's allow list does not cover. The runner asks an adapter again five minutes before
+`expires_at`, and when a host answers 401 to a request it set the token on, not more
+often than every thirty seconds. The new answer changes the token and nothing else: one
+that names other hosts, schemes or paths is refused and reported, and the old token
+stays, because what a run reaches is fixed when it starts.
+
+**Placeholders.** A program often does not start without a credential set. A
+definition, or an adapter's answer, names variables the enclosure gets with the value
+`qory-sets-the-credential-outside-the-enclosure`, which is no credential anywhere; the
+proxy replaces what the program sends. A run that passes a value of its own for such a
+variable does not start.
+
+**Termination.** For the hosts the credentials are for, and the hosts with path rules,
+the proxy ends the session's TLS itself, answering as the host with a certificate of an
+authority made for the run. The authority's key is in the runner's memory and nowhere
+else, and gone with the run; its certificate is what the wall gives the enclosure to
+trust (§The wall). The proxy verifies the real host against the machine's own roots.
+Every other host stays a tunnel the proxy does not read, and a run with no credential
+and no path rule has no authority at all.
+
+**The record.** `ai.qory.run.policy_applied` carries each use, `name`, `hosts`, `scheme`
+and `paths`, and the `terminated` hosts. On a terminated host `ai.qory.run.egress` is one
+event per request, `method: HTTPS` with `request_method`, `path` without its query,
+`path_rule`, and `credential`, the name of the one the proxy set. No event, no report
+and no error carries a token.
 
 ## The events
 
@@ -221,12 +356,12 @@ The types, one namespace. The runner's own:
 | Type | When | Data |
 |---|---|---|
 | `ai.qory.ping` | before the runtime starts, to the webhook only, when one is configured | `runner_version`, `events` |
-| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, and behind a wall `wall`, `image` |
-| `ai.qory.run.policy_applied` | right after, once | `mode`, `allow`, `source`, `path`, `digest`, `declared` |
+| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
+| `ai.qory.run.policy_applied` | right after, once | `mode`, `allow`, `source`, `digest`, `declared`, and with them set `paths`, `credentials`, `terminated` |
 | `ai.qory.run.log` | one per chunk of output: one line or 4096 bytes, whichever comes first | `stream`, `bytes` |
-| `ai.qory.run.egress` | one per connection through the proxy, allowed or denied | `host`, `port`, `method`, `decision`, `mode`, `rule` |
+| `ai.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request | `host`, `port`, `method`, `decision`, `mode`, `rule`, and per request `request_method`, `path`, `path_rule`, `credential` |
 | `ai.qory.run.heartbeat` | every `interval_seconds` while the runtime runs | `elapsed_seconds`, `interval_seconds` |
-| `ai.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `duration_ms` |
+| `ai.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
 
 The session's, produced by a descriptor from what the runtime reports:
 
@@ -237,16 +372,36 @@ The session's, produced by a descriptor from what the runtime reports:
 | `ai.qory.session.tool_started` | the runtime is about to run a tool | `session_id`, `tool`, `tool_use_id`, `input` |
 | `ai.qory.session.tool_finished` | a tool ran and returned | the same, `response`, `duration_ms` |
 | `ai.qory.session.tool_failed` | a tool ran and failed | the same, `error`, `interrupted`, `duration_ms` |
-| `ai.qory.session.turn_finished` | the runtime finished responding | `session_id`, `message` |
+| `ai.qory.session.turn_finished` | the runtime finished responding | `session_id`, `message`, `background_tasks` |
 | `ai.qory.session.turn_failed` | a turn ended on an API error | `session_id`, `error`, `details`, `message` |
 | `ai.qory.session.subagent_started` | a subagent was spawned | `session_id`, `agent_id`, `agent_type` |
-| `ai.qory.session.subagent_finished` | a subagent finished | the same, `message` |
+| `ai.qory.session.subagent_finished` | a subagent finished | the same, `message`, `background_tasks` |
 | `ai.qory.session.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
 | `ai.qory.session.ended` | the runtime closed its session | `session_id`, `reason` |
 | `ai.qory.session.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
 
-Every session event may carry `agent_id` and `agent_type` when it happened inside a
-subagent. The schema of each type, under `events/`, says which fields are required and
+**Work in the background.** A runtime that starts a command or a subagent in the
+background says so where it says everything else: the start is a tool call, recorded as
+`ai.qory.session.tool_started` with the runtime's own `input`, `run_in_background` in
+Claude Code's, and as `ai.qory.session.tool_finished` with whatever the tool answered; a
+subagent's start and end are the subagent events, with its `agent_id` and `agent_type`.
+After that the runtime reports a list, not an event: what is still running, each entry
+with the runtime's `id`, `type`, `status` and `description`, and a shell's `command` or a
+subagent's `agent_type`. The descriptor copies it as `background_tasks` onto
+`turn_finished` and `subagent_finished`, so a receiver that wants a task's end takes the
+first list the task is missing from. Claude Code reports no exit status and no duration
+for a background task, so the record has neither; a descriptor copies what a runtime
+says and computes nothing, and the runtime's own output stream is where more is found.
+What becomes of work in the background when a run ends is the runtime's as well: it may
+end such work itself soon after its last answer, wait for it up to a ceiling of its own,
+and read that ceiling from a variable. The runner adds no rule of its own here. Behind a
+wall only the variables a run names go in, so such a variable is named like any other;
+and the run's stop signal and grace are what the runtime has to close such work when the
+runner stops it.
+
+Every session event that comes from a hook may carry `agent_id` and `agent_type` when
+it happened inside a subagent; `ai.qory.session.result`, read from the runtime's output,
+carries neither. The schema of each type, under `events/`, says which fields are required and
 what each holds. Values are copied from the runtime unchanged: `input` and `response`
 have the shape the tool gave them, `error` is display text, and the enumerations in
 `source`, `reason`, `kind`, `outcome` are the runtime's words.
@@ -323,6 +478,22 @@ error. The file sink has every event regardless. The webhook never delays the se
 posting is asynchronous behind a bounded queue, and a queue that fills spools to the
 same directory rather than blocking the runtime.
 
+**After a runner that died.** The run directory says what the receiver is still owed
+without the runner that wrote it. `events.jsonl` is written as events happen.
+`delivered.log` beside it gets a line as each batch is accepted, the delivery id and the
+sequence of every event in it, and the one word `stopped` for a 410. `lock` is held by
+the runner for as long as it lives, by the kernel, so it is free once the runner is gone
+however it went. Sending a run again is the job's last step, whatever happened before
+it: refused while the lock is held; then what the run's wall left behind is removed, by
+the run's label; a record with no `ai.qory.run.exited` gets one, numbered on from the
+last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`; and every
+event the webhook's filter wants that no accepted batch named is posted, in order, in
+batches cut the same way, until accepted or given up on. What is still not accepted is
+under `undelivered/` again. A receiver sees some events twice when the runner died
+between an answer and its line, and discards them by `id` as ever. Nothing of this
+recovers a machine that died: the record went with it, and a receiver learns of that
+from heartbeats that stop.
+
 No timestamp is signed and no replay window is checked: a replayed batch is a duplicate
 the receiver already discards by event id, and the secret is the only credential.
 Stripe's signed timestamp and the Standard Webhooks headers were considered and set
@@ -333,18 +504,46 @@ that verifies the signature, deduplicates and appends to a file, which the modul
 run the webhook sink against. It is not a public package and no command ships it; a
 receiver written by anyone else follows this section, and may read that code.
 
-## The runtime descriptor
+## The runtime
 
-`descriptor.schema.json`. One YAML file per runtime under `runtimes/<name>/`, embedded
-in the binary as the default and overridden by `<name>.yaml` in a directory the command
-names, `~/.config/qory/runtimes/` for `qory`. It has three parts.
+The runner starts a program, records it and stops it, and knows no program. What is
+particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
+enclosure is behind `wall.Wall`, and Claude Code is one implementation of it among the
+ones there may be. A runtime answers five things: its name and the version of the
+program it was written against, reported in `ai.qory.run.started`; how a launch is
+prepared so the program reports to the runner, which may change the arguments, add
+variables and write into the run directory and nothing else; whether the program's
+standard output is records to read; what event, if any, one record is; and how the
+program is asked to leave, a signal and a grace.
+
+There are three ways to a runtime, and a name resolves to the first that applies:
+
+1. **A descriptor**, a runtime written as data (below): `<name>.yaml` in a directory
+   the command names, `~/.config/qory/runtimes/` for `qory`, then the one this contract
+   ships under `runtimes/<name>/`. Nothing of a descriptor runs, so a machine adds a
+   runtime or corrects one without a new binary.
+2. **A bare runtime**, for a name nothing describes. Nothing is prepared and no record
+   is read: the run's own events, its log and its egress record are all there, the
+   session's are not. Any program runs behind a wall this way from the first day.
+3. **An implementation in Go**, for a caller that embeds the runner and whose program
+   needs what a descriptor cannot say. It is given to `session.Spec.Runtime` like any
+   other.
+
+`runtimes/runtimetest` is what any of them is held to: `Conforms`, that a runtime leaves
+alone what is not its own, and `Replays`, that its records produce exactly the recorded
+events and that each passes this contract's schema.
+
+### The descriptor
+
+`descriptor.schema.json`. One YAML file per runtime. It has four parts.
 
 **Sources**: how the runner attaches. The terminal bytes always, with nothing to match
 in them and so no source. `output`: JSON lines on the runtime's standard output, when the
 session runs on pipes; a line that is not a JSON object is not a record. `hooks`: the
 runtime's hook events, for each of which the runner installs its forwarder as a command
-hook, the way `install` names among the installers the binary has; `claude-settings`
-adds a group per event under `hooks` in the JSON settings the launch passes with
+hook, the way `install` names among the installers the binary has: a descriptor names
+an installer and never brings one, so a program that takes hooks another way needs an
+installer in the runner before a descriptor can name it. `claude-settings` adds a group per event under `hooks` in the JSON settings the launch passes with
 `--settings`, leaving the groups already there. The forwarder writes the JSON it read on
 its standard input to the local socket, as one record. A forwarder exits 0 and prints
 nothing, which every hook interface reads as no decision, so an installed hook observes
@@ -359,11 +558,14 @@ event; a record no rule matches produces nothing. No patterns, no expressions, n
 defaults, no concatenation. If equality and presence prove too narrow, the next step is
 a bounded expression language, and before that a runner change.
 
+**Stop**, optional: `signal`, one of the six above, and `grace`, a duration. It is how a
+runtime that closes its session on one signal and drops it on another says which.
+
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
 per event the rules produce from them, in order. A descriptor without fixtures is not
 accepted. The tests validate every record and every expected event against the schemas;
-the session package replays the records through the rules and compares.
+`runtimetest.Replays` replays the records through the runtime and compares.
 
 `runtimes/claude/descriptor.yaml` is the Claude Code descriptor, written against version
 2.1.273 as installed and its published hooks reference. Its hooks are the canonical
@@ -405,8 +607,26 @@ for all of them.
   the run passes;
 - a user that is not root, no added capabilities, no privileged mode, no host
   namespaces;
+- no credential the run's policy selects: a placeholder where a program wants one set
+  and the certificate of the run's authority, never a token and never the authority's
+  key;
 - never the container runtime's own socket: a process that can ask the daemon for a
-  container on the host's network has left the wall.
+  container on the host's network has left the wall. A mount that is a socket, or a
+  directory holding a runtime's, is refused.
+
+When the run has an authority of its own (§Credentials), a wall gives the enclosure
+one bundle to trust, the image's own authorities with the run's certificate after them,
+and points the variables programs read a bundle's path from at it: `SSL_CERT_FILE`,
+`GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`
+unless the caller names others. The bundle is the image's and one more, never the run's
+alone, because those variables replace a program's trust and do not add to it; an image
+that keeps a bundle nowhere known gets the run's alone and reaches only the terminated
+hosts over TLS, which is the image's to mend. The authority's key never crosses.
+
+A run may name limits on what the agent uses, processors, memory, processes and the
+size of `/dev/shm`; an adapter passes them to its engine and a run that names none gets
+the engine's defaults. They are no guarantee of the wall's: they keep one run from
+starving a machine, not an agent inside.
 
 The proxy is part of the list, because it dials from outside on behalf of what is
 inside: behind a wall it is **guarded**, and what is on the runner's machine is not

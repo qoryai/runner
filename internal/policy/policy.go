@@ -34,14 +34,22 @@ const (
 
 // Policy is the policy document.
 type Policy struct {
-	Version int    `json:"version"`
-	Egress  Egress `json:"egress"`
+	Version     int        `json:"version"`
+	Egress      Egress     `json:"egress"`
+	Credentials []Selected `json:"credentials,omitempty"`
 }
 
 // Egress is the policy's egress section.
 type Egress struct {
-	Mode  Mode     `json:"mode"`
-	Allow []string `json:"allow"`
+	Mode  Mode                `json:"mode"`
+	Allow []string            `json:"allow"`
+	Paths map[string][]string `json:"paths,omitempty"`
+}
+
+// Selected is one credential of the machine's the policy lets the run use.
+type Selected struct {
+	Name     string `json:"name"`
+	Argument string `json:"argument,omitempty"`
 }
 
 // Loaded is a policy as read for a run: the document, where it came from and its
@@ -195,4 +203,57 @@ func (m Mode) Validate() error {
 		return nil
 	}
 	return fmt.Errorf("egress mode %q is neither observe nor enforce", string(m))
+}
+
+// MatchPath returns the first of patterns that matches path, and whether one did. A
+// pattern is a path matched whole, or up to a final * matched as a prefix. The
+// comparison is exact, case included: on a host that ignores case this denies a
+// spelling the host would have taken, never the reverse.
+func MatchPath(patterns []string, path string) (string, bool) {
+	for _, p := range patterns {
+		if prefix, ok := strings.CutSuffix(p, "*"); ok {
+			if strings.HasPrefix(path, prefix) {
+				return p, true
+			}
+		} else if p == path {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// CoversPath reports whether a path pattern covers another: the same pattern, or a
+// prefix pattern whose prefix the other starts with.
+func CoversPath(entry, other string) bool {
+	if entry == other {
+		return true
+	}
+	prefix, ok := strings.CutSuffix(entry, "*")
+	return ok && strings.HasPrefix(strings.TrimSuffix(other, "*"), prefix)
+}
+
+// CleanPath is the path of a request as a path rule reads it, and whether it can be
+// read one way only. escaped is the path as sent. It is refused when it holds an
+// encoded slash, backslash, dot or percent sign, a backslash, an empty segment, or a
+// dot segment: a proxy and a server that disagree on any of those disagree on which
+// rule applies.
+func CleanPath(escaped string) (string, bool) {
+	if escaped == "" {
+		return "/", true
+	}
+	lower := strings.ToLower(escaped)
+	for _, bad := range []string{"%2f", "%5c", "%2e", "%25", "\\", "//", "/./", "/../"} {
+		if strings.Contains(lower, bad) {
+			return "", false
+		}
+	}
+	if !strings.HasPrefix(escaped, "/") || strings.HasSuffix(escaped, "/.") || strings.HasSuffix(escaped, "/..") {
+		return "", false
+	}
+	for i := 0; i < len(escaped); i++ {
+		if c := escaped[i]; c < 0x21 || c == 0x7f {
+			return "", false
+		}
+	}
+	return escaped, true
 }

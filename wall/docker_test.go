@@ -15,15 +15,27 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 // recorder is a machine with no Docker: it records every command and answers the two
 // the adapter reads.
 type recorder struct {
-	t       *testing.T
-	gateway string
-	local_  bool
-	uid     int
-	lines   []string
-	fail    string
+	relayEnv string
+	t        *testing.T
+	gateway  string
+	local_   bool
+	uid      int
+	lines    []string
+	fail     string
 }
 
 func (r *recorder) run(_ context.Context, argv []string) ([]byte, error) {
+	argv = append([]string{}, argv...)
+	for i, a := range argv {
+		// The relay's environment file is in a directory of the test's; its content is
+		// what matters, and it is kept for the test to read.
+		if a == "--env-file" {
+			if b, err := os.ReadFile(argv[i+1]); err == nil {
+				r.relayEnv = string(b)
+			}
+			argv[i+1] = "RELAYENVFILE"
+		}
+	}
 	line := words(argv)
 	r.lines = append(r.lines, line)
 	switch {
@@ -38,10 +50,15 @@ func (r *recorder) run(_ context.Context, argv []string) ([]byte, error) {
 	}
 	return nil, nil
 }
+func (r *recorder) output(_ context.Context, argv []string) ([]byte, error) {
+	r.lines = append(r.lines, words(argv))
+	return nil, errors.New("no such file")
+}
 func (r *recorder) local(string) bool        { return r.local_ }
 func (r *recorder) tempDir() (string, error) { return r.t.TempDir(), nil }
 func (r *recorder) ids() (int, int)          { return r.uid, 1000 }
 func (r *recorder) checkHelper(string) error { return nil }
+func (r *recorder) socket(p string) bool     { return strings.HasSuffix(p, ".sock") }
 
 const runID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 
@@ -49,7 +66,7 @@ func launch() Launch {
 	return Launch{
 		Command: "claude", Args: []string{"--settings", "/work/.qory/runs/" + runID + "/settings.json", "-p", "say hi"},
 		Env: []string{"ANTHROPIC_API_KEY=not-a-real-key", "QORY_RUN_ID=" + runID}, Dir: "/work",
-		Proxy: "127.0.0.1:50123", Socket: "/tmp/qory-run-1/sock", Mounts: []Mount{{Path: "/work"}, {Path: "/home/dev/.qory/homes/work", ReadOnly: true}, {Path: "/work/.qory/runs/" + runID, ReadOnly: true}},
+		Proxy: "127.0.0.1:50123", ProxyToken: "not-a-real-token", Socket: "/tmp/qory-run-1/sock", Mounts: []Mount{{Path: "/work"}, {Path: "/home/dev/.qory/homes/work", ReadOnly: true}, {Path: "/work/.qory/runs/" + runID, ReadOnly: true}},
 	}
 }
 
@@ -141,6 +158,9 @@ func TestDockerCommandLines(t *testing.T) {
 				t.Error("Close left the environment file")
 			}
 			got := strings.Join(rec.lines, "\n") + "\n\nwrapped:\n" + words(append([]string{wrapped.Command}, wrapped.Args...)) + "\n\nenvironment:\n" + string(env)
+			if rec.relayEnv != RelayTokenEnv+"=not-a-real-token\n" || strings.Contains(got, "not-a-real-token") {
+				t.Errorf("the proxy's token belongs in the relay's environment file and nowhere else; the file holds %q", rec.relayEnv)
+			}
 			if strings.Contains(strings.Join(rec.lines, "\n")+strings.Join(wrapped.Args, " "), "not-a-real-key") {
 				t.Error("a value of the environment is on a command line")
 			}
@@ -226,5 +246,67 @@ func TestDockerRefusesAPathItCannotMount(t *testing.T) {
 		if _, err := e.Wrap(context.Background(), l); err == nil {
 			t.Errorf("%q was written to the environment file", env)
 		}
+	}
+}
+
+// TestDockerLimitsTheAgentAndRefusesASocket pins that the run's limits reach the
+// agent's command line and not the relay's, that a limit in no known shape is refused,
+// and that a socket is never mounted.
+func TestDockerLimitsTheAgentAndRefusesASocket(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	l := launch()
+	l.Limits = Limits{CPUs: "1.5", Memory: "8g", PIDs: 4096, ShmSize: "2g"}
+	got, err := e.Wrap(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line := words(got.Args); !strings.Contains(line, "--cpus 1.5 --memory 8g --shm-size 2g --pids-limit 4096") {
+		t.Errorf("the agent's command carries no limits: %s", line)
+	}
+	for _, line := range rec.lines {
+		if strings.Contains(line, "--cpus") {
+			t.Errorf("a limit on a command of the wall's own: %s", line)
+		}
+	}
+	for name, lim := range map[string]Limits{
+		"a flag as cpus":   {CPUs: "--privileged"},
+		"a unit of t":      {Memory: "1t"},
+		"a flag as shm":    {ShmSize: "-1"},
+		"a negative count": {PIDs: -1},
+	} {
+		l = launch()
+		l.Limits = lim
+		if _, err := e.Wrap(context.Background(), l); err == nil {
+			t.Errorf("%s: the limit was accepted", name)
+		}
+	}
+	l = launch()
+	l.Mounts = append(l.Mounts, Mount{Path: "/var/run/docker.sock"})
+	if _, err := e.Wrap(context.Background(), l); err == nil {
+		t.Error("the engine's socket was mounted")
+	}
+}
+
+// TestDockerReapsWhatARunLeft pins that a reap asks by the run's label and removes the
+// containers before the networks.
+func TestDockerReapsWhatARunLeft(t *testing.T) {
+	rec := &recorder{t: t, uid: 1000}
+	d := &Docker{sys: rec}
+	if _, err := d.Reap(context.Background(), "-x"); err == nil {
+		t.Error("a flag was taken as a run id")
+	}
+	if _, err := d.Reap(context.Background(), runID); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(rec.lines, "\n")
+	ps, ls := strings.Index(got, "ps --all --quiet --filter label=ai.qory.run="+runID), strings.Index(got, "network ls --quiet --filter label=ai.qory.run="+runID)
+	if ps < 0 || ls < ps {
+		t.Errorf("the reap asked:\n%s", got)
 	}
 }

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/policy.schema.json",
   "title": "Run policy",
-  "description": "The document that narrows what one run may do. Read once from a file outside the checkout, or later carried in a run start answer, and pinned for the run. It can only tighten what the runner binary allows; it never grants.",
+  "description": "The document that narrows what one run may do. Read once from a file outside the checkout, or later carried in a run start answer, and pinned for the run. It can only tighten what the runner binary allows; it never grants: a credential it selects is one the machine defines, and it defines none.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "egress"],
@@ -23,15 +23,46 @@
           "enum": ["observe", "enforce"]
         },
         "allow": {
-          "description": "Hosts the session may reach: a lower-case host name, or a *. suffix matching every host below it and not the apex itself. No ports, no paths, no schemes. Absent means an empty list.",
+          "description": "Hosts the session may reach: a lower-case host name, or a *. suffix matching every host below it and not the apex itself. No ports, no paths, no schemes: paths have a key of their own. Absent means an empty list.",
           "type": "array",
           "uniqueItems": true,
           "items": {
             "type": "string",
             "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
           }
+        },
+        "paths": {
+          "description": "The paths the session may ask of a host, by host in allow's grammar. A host listed here is one the proxy terminates TLS for, behind a wall, because a path is inside the connection: a request whose path no entry matches is denied under enforce and recorded either way, and a host not listed is reached on every path. A path is compared as the server reads it, case and all; a request whose path could be read two ways is denied.",
+          "type": "object",
+          "propertyNames": {"pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"},
+          "additionalProperties": {
+            "description": "An empty list is no path of the host at all.",
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"$ref": "#/$defs/path"}
+          }
         }
       }
+    },
+    "credentials": {
+      "description": "The credentials of the machine's this run may use, by name, behind a wall. The runner holds each outside the enclosure and the proxy sets it on the requests to the hosts it is for, which it terminates TLS for; the session never holds it. A name the machine does not define is no run.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+          "argument": {"description": "What the run asks the credential for, a repository say, given to the definition's adapter as one argument. The definition says what an argument may look like; one it does not provide for is no run.", "type": "string", "minLength": 1, "maxLength": 256}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "path": {
+      "description": "A path from the root, matched whole, or up to a final * matched as a prefix: /repos/acme/shop, /repos/acme/shop/*. No other wildcard, no query.",
+      "type": "string",
+      "pattern": "^/[^*?#\\s]*\\*?$"
     }
   }
 }

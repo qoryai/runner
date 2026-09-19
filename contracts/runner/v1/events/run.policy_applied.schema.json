@@ -11,6 +11,23 @@
     "allow": {"description": "The effective allow list: the policy's entries, or when a declaration was given, the declared entries the policy covers.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "source": {"description": "config when a policy document was given to the runner; none when there was none and the runner observes everything.", "type": "string", "enum": ["config", "none"]},
     "digest": {"description": "sha256 of the policy document as canonical JSON, hex, when source is config: the version stamp of the run's policy, the same for the same policy however it was written.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "paths": {"description": "The policy's path rules, by host, when it has any.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+    "credentials": {
+      "description": "The credentials the run holds outside the enclosure, as resolved before the runtime started: where each goes and how. Never a token.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "hosts", "scheme"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "hosts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "scheme": {"type": "string", "enum": ["bearer", "basic", "header"]},
+          "paths": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for and the ones with path rules. Every other host is a tunnel the proxy does not read.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "declared": {"description": "The egress the harness declared, as handed to the runner, when it was.", "type": "array", "items": {"type": "string", "minLength": 1}}
   }
 }

@@ -88,3 +88,52 @@ func TestRelayRefusesWhatIsNotAForward(t *testing.T) {
 		}
 	}
 }
+
+// TestRelayOpensEveryConnectionWithTheRunsToken pins the relay's half of the proxy's
+// gate: with the token in its environment, what it forwards starts with the preamble.
+func TestRelayOpensEveryConnectionWithTheRunsToken(t *testing.T) {
+	t.Setenv(RelayTokenEnv, "the-runs-token")
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	got := make(chan string, 1)
+	go func() {
+		c, err := target.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		b, _ := io.ReadAll(c)
+		got <- string(b)
+	}()
+	free, _ := net.Listen("tcp", "127.0.0.1:0")
+	port := free.Addr().(*net.TCPAddr).Port
+	free.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := &syncBuffer{}
+	go Relay(ctx, []string{fmt.Sprintf("%d=%s", port, target.Addr())}, ready)
+	for range 200 {
+		if strings.Contains(ready.String(), RelayReady) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.WriteString(c, "hello")
+	c.(*net.TCPConn).CloseWrite()
+	select {
+	case s := <-got:
+		if s != "QORY-RELAY the-runs-token\nhello" {
+			t.Errorf("the target read %q", s)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("the target read nothing")
+	}
+	c.Close()
+}

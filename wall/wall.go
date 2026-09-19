@@ -25,6 +25,14 @@ type Wall interface {
 	Prepare(ctx context.Context, req Request) (Enclosure, error)
 }
 
+// Reaper is a wall that can remove what it left of a run whose runner died before it
+// closed the enclosure. It is asked only for a run known to be over.
+type Reaper interface {
+	// Reap removes everything the wall created for the run and reports how many
+	// things that was. Nothing left is not an error.
+	Reap(ctx context.Context, runID string) (int, error)
+}
+
 // Request is what a wall is told about the run it encloses.
 type Request struct {
 	// RunID names what the wall creates, so two runs never share anything.
@@ -65,12 +73,40 @@ type Launch struct {
 	Interactive bool
 	// Proxy is the address the proxy listens on, host:port with the port it got.
 	Proxy string
+	// ProxyToken is what the proxy requires every connection to open with, when it is
+	// not empty. An adapter gives it to its relay and to nothing inside the enclosure,
+	// so the proxy serves this run's relay alone, whoever else reaches its address.
+	ProxyToken string
+	// CA, when not empty, is the certificate of the run's authority, PEM: the proxy
+	// answers as some hosts itself, to set a credential the enclosure never holds, and
+	// what runs inside must trust it for those. An adapter shows the enclosure one
+	// bundle, the image's own authorities and this one, and points the variables
+	// programs read a bundle's path from at it. The key never crosses.
+	CA []byte
 	// Socket is the path of the hook socket on the host, empty when there is none.
 	Socket string
 	// Mounts are the files and directories of the host the run lists beside Dir: the
 	// checkout around Dir, a composed home, the run directory read-only. The
 	// enclosure shows each at the same path, and nothing of the host besides them.
 	Mounts []Mount
+	// Limits are the resources the agent gets; the zero value leaves each to the
+	// adapter's engine.
+	Limits Limits
+}
+
+// Limits are the resources an enclosure gives the agent. A zero field is no limit of
+// the run's: the engine's own default stands.
+type Limits struct {
+	// CPUs is how many processors' worth of time, a decimal number: 2, 1.5.
+	CPUs string
+	// Memory is the most memory, a number of bytes with an optional unit of b, k, m or
+	// g: 8g.
+	Memory string
+	// PIDs is the most processes and threads.
+	PIDs int
+	// ShmSize is the size of /dev/shm, written as Memory is. A browser needs more than
+	// an engine's default.
+	ShmSize string
 }
 
 // Mount is one file or directory of the host an enclosure shows, at the same path.

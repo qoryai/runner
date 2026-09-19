@@ -1,4 +1,4 @@
-package session
+package claude
 
 import (
 	"encoding/json"
@@ -7,23 +7,31 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/qoryai/runner/internal/descriptor"
+	"github.com/qoryai/runner/runtimes"
 )
 
 // hookTimeout is the seconds a runtime gives the forwarder before cancelling it.
 const hookTimeout = 5
 
-// installHooks adds the forwarder as a command hook for each of the descriptor's
-// events, the way the descriptor's installer says, and returns the arguments that make
-// the runtime read it and the file they name. The one installer today, claude-settings, reads the JSON file
-// the arguments name after --settings, or starts from an empty document when they name
-// none, adds a hook group per event under "hooks", writes the result as settings.json
-// in the run directory, and names that file instead. The file the launch passed is not
-// modified.
-func installHooks(hooks *descriptor.Hooks, args []string, dir string, forwarder []string) ([]string, string, error) {
-	if hooks.Install != "claude-settings" {
-		return nil, "", fmt.Errorf("hook installer %q is not one this runner implements", hooks.Install)
+// SettingsInstaller is the name a descriptor gives [Settings].
+const SettingsInstaller = "claude-settings"
+
+// Settings installs the forwarder as a command hook for each event in the JSON settings
+// Claude Code reads. It reads the file the arguments name after --settings, or the
+// document they hold there, or starts from an empty one when they name none, adds a
+// hook group per event under "hooks", writes the result as settings.json in the run
+// directory, and names that file instead. The file the launch passed is not modified.
+func Settings(events []string, a runtimes.Attach) (runtimes.Launch, error) {
+	launch := a.Launch
+	args, err := settingsArgs(events, launch.Args, a.RunDir, a.Forwarder)
+	if err != nil {
+		return runtimes.Launch{}, err
 	}
+	launch.Args = args
+	return launch, nil
+}
+
+func settingsArgs(events []string, args []string, dir string, forwarder []string) ([]string, error) {
 	settings := map[string]any{}
 	at := -1
 	for i, a := range args {
@@ -44,10 +52,10 @@ func installHooks(hooks *descriptor.Hooks, args []string, dir string, forwarder 
 		if strings.HasPrefix(strings.TrimSpace(args[at]), "{") {
 			b = []byte(args[at])
 		} else if b, err = os.ReadFile(args[at]); err != nil {
-			return nil, "", fmt.Errorf("settings %s: %w", args[at], err)
+			return nil, fmt.Errorf("settings %s: %w", args[at], err)
 		}
 		if err := json.Unmarshal(b, &settings); err != nil {
-			return nil, "", fmt.Errorf("settings %s: %w", args[at], err)
+			return nil, fmt.Errorf("settings %s: %w", args[at], err)
 		}
 	}
 	groups, _ := settings["hooks"].(map[string]any)
@@ -55,25 +63,25 @@ func installHooks(hooks *descriptor.Hooks, args []string, dir string, forwarder 
 		groups = map[string]any{}
 	}
 	entry := map[string]any{"type": "command", "command": shellLine(forwarder), "timeout": hookTimeout}
-	for _, ev := range hooks.Events {
+	for _, ev := range events {
 		existing, _ := groups[ev].([]any)
 		groups[ev] = append(existing, map[string]any{"hooks": []any{entry}})
 	}
 	settings["hooks"] = groups
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	path := filepath.Join(dir, "settings.json")
 	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if at >= 0 {
 		args = append([]string(nil), args...)
 		args[at] = path
-		return args, path, nil
+		return args, nil
 	}
-	return append(append([]string(nil), args...), "--settings", path), path, nil
+	return append(append([]string(nil), args...), "--settings", path), nil
 }
 
 // shellLine quotes a command for a shell, since a command hook runs under sh -c.

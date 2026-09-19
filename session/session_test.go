@@ -21,6 +21,8 @@ import (
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/receiver"
 	"github.com/qoryai/runner/internal/socket"
+	"github.com/qoryai/runner/runtimes"
+	"github.com/qoryai/runner/runtimes/claude"
 	"github.com/qoryai/runner/session"
 )
 
@@ -108,7 +110,7 @@ func spec(t *testing.T, pol *session.Policy, env ...string) session.Spec {
 		}
 	})
 	return session.Spec{
-		Runtime:       "claude",
+		Runtime:       claudeCode(t),
 		Command:       os.Args[0],
 		Args:          []string{"--settings", writeSettings(t, dir)},
 		Env:           append([]string{"QORY_TEST_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
@@ -122,6 +124,17 @@ func spec(t *testing.T, pol *session.Policy, env ...string) session.Spec {
 		Heartbeat:     10 * time.Millisecond,
 		Report:        func(l string) { t.Log("report:", l) },
 	}
+}
+
+// claudeCode is the runtime most tests run as: the contract's descriptor for Claude
+// Code, in front of a program of the test's own.
+func claudeCode(t *testing.T) runtimes.Runtime {
+	t.Helper()
+	rt, err := claude.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt
 }
 
 func writeSettings(t *testing.T, dir string) string {
@@ -333,6 +346,10 @@ func TestWebhookPingsFailsClosedAndDelivers(t *testing.T) {
 	if store.Count() != len(evs) || res.Undelivered != 0 {
 		t.Errorf("store holds %d of %d events, %d undelivered", store.Count(), len(evs), res.Undelivered)
 	}
+	// Everything was accepted during the run, the ping too, so nothing is owed after it.
+	if again, err := session.Resend(context.Background(), session.ResendSpec{Dir: res.Dir, Webhook: cfg}); err != nil || again.Sent != 0 || again.Closed || store.Count() != len(evs) {
+		t.Errorf("resend after a delivered run: %+v, %v", again, err)
+	}
 
 	refuse = true
 	sp = spec(t, nil)
@@ -395,5 +412,298 @@ func TestContextEndStopsTheRuntime(t *testing.T) {
 	}
 	if res.ExitCode != -1 || res.Signal != "SIGTERM" || res.State != "failed" {
 		t.Errorf("result %+v", res)
+	}
+}
+
+func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "sleep 30"}
+	sp.Timeout = 300 * time.Millisecond
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.TimedOut || res.Signal != "SIGTERM" || res.State != "failed" {
+		t.Errorf("result %+v", res)
+	}
+	exited := ofType(events(t, res), "ai.qory.run.exited")
+	if len(exited) != 1 || data(exited[0])["reason"] != "timeout" {
+		t.Errorf("run.exited %v", exited)
+	}
+	// A limit that was not reached is not a reason.
+	sp = spec(t, nil)
+	sp.Timeout = time.Minute
+	if res, err = runWithSettingsEnv(t, sp); err != nil {
+		t.Fatal(err)
+	}
+	if exited := ofType(events(t, res), "ai.qory.run.exited"); res.TimedOut || data(exited[0])["reason"] != nil {
+		t.Errorf("a run within its limit timed out: %+v %v", res, exited)
+	}
+}
+
+func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
+	const id = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp := spec(t, nil)
+	sp.RunID = id
+	sp.Labels = map[string]string{"run_key": "queue/1234", "repository": "acme/shop", "issue": "77"}
+	res, err := runWithSettingsEnv(t, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RunID != id || filepath.Base(res.Dir) != id {
+		t.Errorf("result %+v", res)
+	}
+	started := ofType(events(t, res), "ai.qory.run.started")
+	if labels, _ := data(started[0])["labels"].(map[string]any); len(labels) != 3 || labels["run_key"] != "queue/1234" {
+		t.Errorf("run.started %v", started)
+	}
+	many := map[string]string{}
+	for i := range session.MaxLabels + 1 {
+		many[fmt.Sprint("k", i)] = "v"
+	}
+	for name, change := range map[string]func(*session.Spec){
+		"a path as the run id":  func(s *session.Spec) { s.RunID = "../../elsewhere" },
+		"an upper-case run id":  func(s *session.Spec) { s.RunID = strings.ToUpper(id) },
+		"an upper-case key":     func(s *session.Spec) { s.Labels = map[string]string{"Repo": "x"} },
+		"an empty key":          func(s *session.Spec) { s.Labels = map[string]string{"": "x"} },
+		"a long value":          func(s *session.Spec) { s.Labels = map[string]string{"k": strings.Repeat("v", 257)} },
+		"too many labels":       func(s *session.Spec) { s.Labels = many },
+		"a negative time limit": func(s *session.Spec) { s.Timeout = -time.Second },
+	} {
+		sp := spec(t, nil)
+		change(&sp)
+		if _, err := session.Run(context.Background(), sp); err == nil {
+			t.Errorf("%s: the run started", name)
+		}
+		if entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs")); len(entries) > 0 {
+			t.Errorf("%s: a run directory was made: %v", name, entries)
+		}
+	}
+}
+
+func TestPolicyUnderACeilingNarrowsOnly(t *testing.T) {
+	enforce := func(allow ...string) *session.Policy {
+		return &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: allow}}
+	}
+	observe := &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}}
+	run := enforce("api.github.com", "pypi.org")
+	if got := run.Under(nil); got != run {
+		t.Errorf("under no ceiling %+v", got)
+	}
+	if got := run.Under(observe); got != run {
+		t.Errorf("under an observing ceiling %+v", got)
+	}
+	got := run.Under(enforce("*.github.com", "api.anthropic.com"))
+	if got.Egress.Mode != "enforce" || len(got.Egress.Allow) != 1 || got.Egress.Allow[0] != "api.github.com" {
+		t.Errorf("under an enforcing ceiling %+v", got)
+	}
+	if got := observe.Under(enforce("api.anthropic.com")); got.Egress.Mode != "enforce" || len(got.Egress.Allow) != 1 {
+		t.Errorf("an observing policy under an enforcing ceiling %+v", got)
+	}
+	if _, err := session.ReadPolicy("run.yaml", []byte("version: 1\negress:\n  mode: enforce\n  allow: [api.github.com]\n")); err != nil {
+		t.Error(err)
+	}
+	if _, err := session.ReadPolicy("run.yaml", []byte("version: 1\negress:\n  mode: enforce\n  allow: [\"api.github.com:443\"]\n")); err == nil {
+		t.Error("an allow entry with a port was read")
+	}
+}
+
+func TestStopGraceIsHowLongTheRuntimeHasToLeave(t *testing.T) {
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "trap '' TERM; sleep 30 & wait; wait"}
+	sp.Timeout = 200 * time.Millisecond
+	sp.StopGrace = 300 * time.Millisecond
+	start := time.Now()
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.TimedOut || res.Signal != "SIGKILL" {
+		t.Errorf("result %+v", res)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("a runtime that ignores SIGTERM ran %s, past the grace", took)
+	}
+}
+
+func TestStopSignalIsTheOneTheRunNames(t *testing.T) {
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "trap 'exit 7' INT; trap '' TERM; sleep 30 & wait"}
+	sp.Timeout = 300 * time.Millisecond
+	sp.StopSignal = "SIGINT"
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.TimedOut || res.ExitCode != 7 || res.Signal != "" {
+		t.Errorf("a runtime that leaves on SIGINT alone: result %+v", res)
+	}
+	for _, name := range []string{"SIGKILL", "INT", "sigint", "9"} {
+		sp := spec(t, nil)
+		sp.StopSignal = name
+		if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "stop signal") {
+			t.Errorf("stop signal %q: %v", name, err)
+		}
+	}
+}
+
+// TestResendCompletesAndDeliversTheRecordOfARunThatIsOver pins what a job's last step
+// relies on: what the receiver did not get is sent, once; a record its runner left
+// unfinished is closed with the reason; and a run that still goes is left alone.
+func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
+	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	srv := httptest.NewServer(&receiver.Handler{Secret: "fixture-secret-not-a-real-one", Store: store})
+	defer srv.Close()
+	cfg := &session.Webhook{Version: 1, URL: srv.URL + "/events", Secret: "fixture-secret-not-a-real-one"}
+
+	// A run nobody received, as one whose receiver was away.
+	sp := spec(t, nil)
+	sp.Local = true
+	res, err := runWithSettingsEnv(t, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := len(events(t, res))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	sent, err := session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Webhook: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent.Sent != all || sent.Undelivered != 0 || sent.Closed || store.Count() != all {
+		t.Errorf("first resend %+v, store holds %d of %d", sent, store.Count(), all)
+	}
+	if again, err := session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Webhook: cfg}); err != nil || again.Sent != 0 || store.Count() != all {
+		t.Errorf("second resend %+v, %v, store holds %d", again, err, store.Count())
+	}
+
+	// A record its runner died over: no run.exited, and half a line at the end.
+	sp = spec(t, nil)
+	sp.Local = true
+	if res, err = runWithSettingsEnv(t, sp); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(res.Dir, "events.jsonl")
+	b, _ := os.ReadFile(file)
+	lines := strings.SplitAfter(strings.TrimSuffix(string(b), "\n"), "\n")
+	cut := strings.Join(lines[:len(lines)-1], "") + `{"specversion":"1.0","id":"half`
+	if err := os.WriteFile(file, []byte(cut), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := store.Count()
+	sent, err = session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Webhook: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := events(t, res)
+	last := evs[len(evs)-1]
+	if !sent.Closed || last["type"] != "ai.qory.run.exited" || data(last)["reason"] != "runner_lost" || data(last)["state"] != "failed" {
+		t.Errorf("the record was not closed: %+v, last event %v", sent, last)
+	}
+	if len(evs) != len(lines) || store.Count()-before != len(evs) {
+		t.Errorf("%d events in the file, want %d; the store got %d", len(evs), len(lines), store.Count()-before)
+	}
+
+	// A run that still goes.
+	sp = spec(t, nil)
+	sp.Forwarder = nil
+	sp.Local = true
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "sleep 30"}
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	runCtx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); session.Run(runCtx, sp) }()
+	dir := filepath.Join(sp.Dir, ".qory", "runs", sp.RunID)
+	for range 100 {
+		if _, err := os.Stat(filepath.Join(dir, "lock")); err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := session.Resend(ctx, session.ResendSpec{Dir: dir, Webhook: cfg}); !errors.Is(err, session.ErrRunning) {
+		t.Errorf("resend of a run that still goes: %v", err)
+	}
+	stop()
+	<-done
+}
+
+// leaves is a runtime of the test's own, to show that the session asks the interface
+// and knows no runtime: it prepares nothing, reads nothing, and names how it is asked to
+// leave.
+type leaves struct {
+	runtimes.Runtime
+	stop     runtimes.Stop
+	prepared *runtimes.Attach
+}
+
+func (l leaves) Stop() runtimes.Stop { return l.stop }
+func (l leaves) Prepare(a runtimes.Attach) (runtimes.Launch, error) {
+	*l.prepared = a
+	launch := a.Launch
+	launch.Env = []string{"ADDED_BY_THE_RUNTIME=yes"}
+	return launch, nil
+}
+
+func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T) {
+	script := `test "$ADDED_BY_THE_RUNTIME" = yes || exit 9; trap 'exit 7' INT; trap 'exit 8' HUP; trap '' TERM; sleep 30 & wait`
+	for name, c := range map[string]struct {
+		named string
+		code  int
+	}{"the runtime's": {"", 7}, "the run's": {"SIGHUP", 8}} {
+		t.Run(name, func(t *testing.T) {
+			sp := spec(t, nil)
+			var got runtimes.Attach
+			sp.Runtime = leaves{Runtime: runtimes.Bare("other-agent"), stop: runtimes.Stop{Signal: "SIGINT", Grace: 20 * time.Second}, prepared: &got}
+			sp.Command, sp.Args = "sh", []string{"-c", script}
+			sp.Timeout = 300 * time.Millisecond
+			sp.StopSignal = c.named
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.TimedOut || res.ExitCode != c.code {
+				t.Errorf("result %+v", res)
+			}
+			if got.RunDir != res.Dir || got.Launch.Command != "sh" || len(got.Forwarder) == 0 {
+				t.Errorf("Prepare was given %+v", got)
+			}
+			started := ofType(events(t, res), "ai.qory.run.started")
+			if len(started) != 1 || data(started[0])["runtime"] != "other-agent" {
+				t.Errorf("run.started %v", started)
+			}
+		})
+	}
+	sp := spec(t, nil)
+	sp.Runtime = leaves{Runtime: runtimes.Bare("other-agent"), stop: runtimes.Stop{Signal: "SIGKILL"}, prepared: new(runtimes.Attach)}
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "runtime other-agent") {
+		t.Errorf("a runtime that names SIGKILL: %v", err)
+	}
+}
+
+func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
+	sp := spec(t, nil)
+	sp.Runtime = nil
+	sp.Command, sp.Args = "sh", []string{"-c", "exit 3"}
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := ofType(events(t, res), "ai.qory.run.started")
+	if res.ExitCode != 3 || len(started) != 1 || data(started[0])["runtime"] != "sh" {
+		t.Errorf("%+v %v", res, started)
+	}
+	if _, err := os.Stat(filepath.Join(res.Dir, "settings.json")); !os.IsNotExist(err) {
+		t.Error("something was prepared for a runtime the runner does not know")
 	}
 }

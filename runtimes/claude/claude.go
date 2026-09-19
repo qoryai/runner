@@ -1,0 +1,26 @@
+// Package claude is Claude Code as a runtime of the runner: the contract's descriptor
+// for it, and the one thing of it that takes code, putting the forwarder into the
+// settings it reads its hooks from.
+package claude
+
+import (
+	"io/fs"
+
+	"github.com/qoryai/runner/contracts"
+	"github.com/qoryai/runner/runtimes"
+)
+
+// Name is the runtime's name.
+const Name = "claude"
+
+// descriptorPath is the descriptor in the contract.
+const descriptorPath = "runtimes/claude/descriptor.yaml"
+
+// New is Claude Code by the contract's descriptor.
+func New() (runtimes.Runtime, error) {
+	b, err := fs.ReadFile(contracts.FS, descriptorPath)
+	if err != nil {
+		return nil, err
+	}
+	return runtimes.Described(descriptorPath, b, map[string]runtimes.Installer{SettingsInstaller: Settings})
+}

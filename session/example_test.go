@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/qoryai/runner/runtimes/catalog"
 	"github.com/qoryai/runner/session"
 )
 
@@ -14,8 +15,14 @@ import (
 // program.
 func Example() {
 	exe, _ := os.Executable()
+	// The runtime by its name: a descriptor of the machine's, the contract's, or bare.
+	rt, err := catalog.Lookup("claude", "")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 	res, err := session.Run(context.Background(), session.Spec{
-		Runtime: "claude",
+		Runtime: rt,
 		Command: "claude",
 		Args:    []string{"--settings", "/path/to/settings.json", "-p", "Reply with the single word pong."},
 		Policy:  &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: []string{"api.anthropic.com"}}},

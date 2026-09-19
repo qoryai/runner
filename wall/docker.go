@@ -1,11 +1,13 @@
 package wall
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"debug/elf"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -27,6 +29,9 @@ const (
 	HelperPath = "/qory/qory"
 	// hooksDir is where the directory holding the hook socket is mounted.
 	hooksDir = "/qory/hooks"
+	// BundlePath is where the enclosure finds the authorities it trusts when the run has
+	// one of its own: the image's bundle and the run's certificate, in one file.
+	BundlePath = "/qory/ca-bundle.pem"
 	// relayAlias is the name the agent reaches the relay by, and relayPort the port the
 	// relay forwards to the proxy.
 	relayAlias = "qory-proxy"
@@ -56,6 +61,10 @@ type Docker struct {
 	// RelayArgs are the arguments that make Helper run [Relay]; the forwards follow
 	// them.
 	RelayArgs []string
+	// CAEnv names the variables that point a program at [BundlePath] when the run has
+	// an authority of its own; nil means [DefaultCAEnv]. A program that reads another
+	// is served by naming it here.
+	CAEnv []string
 	// User is the uid:gid both containers run as; empty means this process's own, so
 	// the workspace's files keep their owner. Root is refused.
 	User string
@@ -68,15 +77,28 @@ type Docker struct {
 type system interface {
 	// run runs a command and returns its output, standard error included.
 	run(ctx context.Context, argv []string) ([]byte, error)
+	// output runs a command and returns its standard output alone.
+	output(ctx context.Context, argv []string) ([]byte, error)
 	// local reports whether this machine holds the address.
 	local(ip string) bool
 	// tempDir makes a private directory.
 	tempDir() (string, error)
 	// ids are this process's user and group.
 	ids() (int, int)
+	// socket reports whether the path is a socket, or a directory that holds a
+	// container runtime's.
+	socket(path string) bool
 	// checkHelper refuses a helper that cannot run in a Linux container.
 	checkHelper(path string) error
 }
+
+// DefaultCAEnv are the variables the common programs read a bundle's path from:
+// OpenSSL and Go, git, Node, Python's requests, curl.
+var DefaultCAEnv = []string{"SSL_CERT_FILE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
+
+// imageBundles are where an image keeps its authorities: Debian and Alpine, Red Hat,
+// OpenSUSE, and the OpenSSL default.
+var imageBundles = []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem"}
 
 // What goes on a command line is checked for its shape first, because a word that
 // starts with a dash is a flag to the command that reads it: a run id names things, an
@@ -86,6 +108,8 @@ var (
 	imageShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
 	userShape  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?$`)
 	envShape   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+	cpusShape  = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+	bytesShape = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
 )
 
 // Name is docker, or the command's name when another was given.
@@ -230,13 +254,34 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if err != nil {
 		return Launch{}, err
 	}
+	limits, err := limits(l.Limits)
+	if err != nil {
+		return Launch{}, err
+	}
 	// Everything that can be refused is, before anything is started.
 	env := append([]string(nil), l.Env...)
 	env = append(env, proxy.EnvFor(fmt.Sprintf("http://%s:%d", relayAlias, relayPort))...)
 	if l.Socket != "" {
 		env = append(env, socket.Env+"="+path.Join(hooksDir, filepath.Base(l.Socket)))
 	}
-	envFile, err := e.envFile(env)
+	if len(l.CA) > 0 {
+		names := e.d.CAEnv
+		if names == nil {
+			names = DefaultCAEnv
+		}
+		for _, n := range names {
+			env = append(env, n+"="+BundlePath)
+		}
+	}
+	envFile, err := e.envFile("env", env)
+	if err != nil {
+		return Launch{}, err
+	}
+	var relayEnv []string
+	if l.ProxyToken != "" {
+		relayEnv = []string{RelayTokenEnv + "=" + l.ProxyToken}
+	}
+	relayEnvFile, err := e.envFile("relay-env", relayEnv)
 	if err != nil {
 		return Launch{}, err
 	}
@@ -246,7 +291,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		create = append(create, "--add-host", hostName+":host-gateway")
 	}
 	create = append(create, e.hardening()...)
-	create = append(create, "--read-only", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
+	create = append(create, "--env-file", relayEnvFile, "--read-only", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
 	create = append(create, e.d.RelayArgs...)
 	create = append(create, fmt.Sprintf("%d=%s", relayPort, net.JoinHostPort(e.host, port)))
 	pull, cancel := context.WithTimeout(ctx, relayWait)
@@ -254,6 +299,12 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.relay()})
 	if _, err := e.docker(pull, create...); err != nil {
 		return Launch{}, err
+	}
+	var bundle string
+	if len(l.CA) > 0 {
+		if bundle, err = e.bundle(ctx, l.CA); err != nil {
+			return Launch{}, err
+		}
 	}
 	if _, err := e.docker(ctx, "network", "connect", "--alias", relayAlias, e.inside(), e.relay()); err != nil {
 		return Launch{}, err
@@ -271,14 +322,66 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	run = append(run, "--name", e.agent(), "--label", e.label(), "--network", e.inside())
 	run = append(run, e.hardening()...)
+	run = append(run, limits...)
 	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
 	for _, m := range mounts {
 		run = append(run, "--mount", m)
+	}
+	if bundle != "" {
+		run = append(run, "--mount", bundle)
 	}
 	run = append(run, "--entrypoint", l.Command, e.req.Image)
 	run = append(run, l.Args...)
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
 	return Launch{Command: e.command(), Args: run, Dir: l.Dir}, nil
+}
+
+// bundle writes the file the enclosure trusts: the image's own authorities, read out of
+// the relay's container, which is the same image and exists by now, and the run's
+// certificate after them. An image that keeps a bundle nowhere known gets the run's
+// alone, which serves the hosts the proxy answers as and no other; that is the image's
+// to mend. It returns the file's mount.
+func (e *dockerEnclosure) bundle(ctx context.Context, ca []byte) (string, error) {
+	var image []byte
+	for _, p := range imageBundles {
+		out, err := e.sys.output(ctx, []string{e.command(), "cp", "--follow-link", e.relay() + ":" + p, "-"})
+		if err != nil {
+			continue
+		}
+		if b, err := firstFile(out); err == nil && bytes.Contains(b, []byte("BEGIN CERTIFICATE")) {
+			image = b
+			break
+		}
+	}
+	if e.temp == "" {
+		dir, err := e.sys.tempDir()
+		if err != nil {
+			return "", err
+		}
+		e.temp = dir
+	}
+	file := filepath.Join(e.temp, "ca-bundle.pem")
+	if len(image) > 0 && !bytes.HasSuffix(image, []byte("\n")) {
+		image = append(image, '\n')
+	}
+	if err := os.WriteFile(file, append(image, ca...), 0o644); err != nil {
+		return "", err
+	}
+	return mount(file, BundlePath, true)
+}
+
+// firstFile is the content of the first file in a tar stream, what docker cp writes.
+func firstFile(stream []byte) ([]byte, error) {
+	r := tar.NewReader(bytes.NewReader(stream))
+	for {
+		h, err := r.Next()
+		if err != nil {
+			return nil, err
+		}
+		if h.Typeflag == tar.TypeReg {
+			return io.ReadAll(io.LimitReader(r, 16<<20))
+		}
+	}
 }
 
 // mounts are the launch's own: the workspace, what it lists, the socket's directory.
@@ -290,6 +393,9 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 	for _, m := range l.Mounts {
 		if !filepath.IsAbs(m.Path) {
 			return nil, fmt.Errorf("wall docker: the mount %q is not an absolute path", m.Path)
+		}
+		if e.sys.socket(m.Path) {
+			return nil, fmt.Errorf("wall docker: the mount %q is a socket or holds a container runtime's, which an enclosure never gets", m.Path)
 		}
 		binds = append(binds, bind{m.Path, m.Path, m.ReadOnly})
 	}
@@ -309,6 +415,33 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 			return nil, err
 		}
 		out = append(out, m)
+	}
+	return out, nil
+}
+
+// limits are the agent's resource flags. The relay gets none: it is the runner's own.
+func limits(l Limits) ([]string, error) {
+	var out []string
+	if l.CPUs != "" {
+		if !cpusShape.MatchString(l.CPUs) {
+			return nil, fmt.Errorf("wall docker: the cpus limit %q is not a decimal number", l.CPUs)
+		}
+		out = append(out, "--cpus", l.CPUs)
+	}
+	for _, f := range []struct{ flag, name, value string }{{"--memory", "memory", l.Memory}, {"--shm-size", "shm size", l.ShmSize}} {
+		if f.value == "" {
+			continue
+		}
+		if !bytesShape.MatchString(f.value) {
+			return nil, fmt.Errorf("wall docker: the %s %q is not a number of bytes with a unit of b, k, m or g", f.name, f.value)
+		}
+		out = append(out, f.flag, f.value)
+	}
+	if l.PIDs < 0 {
+		return nil, fmt.Errorf("wall docker: the pids limit %d is negative", l.PIDs)
+	}
+	if l.PIDs > 0 {
+		out = append(out, "--pids-limit", strconv.Itoa(l.PIDs))
 	}
 	return out, nil
 }
@@ -337,7 +470,7 @@ func mount(src, dst string, readonly bool) (string, error) {
 // envFile writes the enclosure's environment where only this user reads it. The file's
 // format is a line per variable with no quoting, so a value holding a newline cannot be
 // passed.
-func (e *dockerEnclosure) envFile(env []string) (string, error) {
+func (e *dockerEnclosure) envFile(name string, env []string) (string, error) {
 	var b strings.Builder
 	for _, kv := range env {
 		// A bare name in the file means the value of the docker command's own variable,
@@ -359,7 +492,7 @@ func (e *dockerEnclosure) envFile(env []string) (string, error) {
 		}
 		e.temp = dir
 	}
-	file := filepath.Join(e.temp, "env")
+	file := filepath.Join(e.temp, name)
 	return file, os.WriteFile(file, []byte(b.String()), 0o600)
 }
 
@@ -412,11 +545,50 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// Reap removes the containers and the networks that carry the run's label: what a
+// runner that died left behind. The containers go first, since a network in use stays.
+func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
+	if !runIDShape.MatchString(runID) {
+		return 0, fmt.Errorf("wall docker: the run id %q cannot name a container", runID)
+	}
+	sys := d.sys
+	if sys == nil {
+		sys = hostSystem{}
+	}
+	e := &dockerEnclosure{d: d, sys: sys, req: Request{RunID: runID}}
+	ctx, cancel := context.WithTimeout(ctx, closeWait)
+	defer cancel()
+	removed := 0
+	var errs []error
+	for _, kind := range []struct{ list, remove []string }{
+		{[]string{"ps", "--all", "--quiet"}, []string{"rm", "--force", "--volumes"}},
+		{[]string{"network", "ls", "--quiet"}, []string{"network", "rm"}},
+	} {
+		out, err := e.docker(ctx, append(kind.list, "--filter", "label="+e.label())...)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for _, id := range strings.Fields(string(out)) {
+			if _, err := e.docker(ctx, append(append([]string{}, kind.remove...), id)...); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			removed++
+		}
+	}
+	return removed, errors.Join(errs...)
+}
+
 // hostSystem is the machine itself.
 type hostSystem struct{}
 
 func (hostSystem) run(ctx context.Context, argv []string) ([]byte, error) {
 	return exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
+}
+
+func (hostSystem) output(ctx context.Context, argv []string) ([]byte, error) {
+	return exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
 }
 
 func (hostSystem) local(ip string) bool {
@@ -433,6 +605,31 @@ func (hostSystem) local(ip string) bool {
 }
 
 func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", "qory-wall-") }
+
+// runtimeSockets are the names a container runtime's socket goes by.
+var runtimeSockets = []string{"docker.sock", "podman/podman.sock", "containerd/containerd.sock", "crio/crio.sock"}
+
+func (hostSystem) socket(p string) bool {
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		p = real
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSocket != 0 {
+		return true
+	}
+	if !info.IsDir() {
+		return false
+	}
+	for _, name := range runtimeSockets {
+		if s, err := os.Stat(filepath.Join(p, name)); err == nil && s.Mode()&os.ModeSocket != 0 {
+			return true
+		}
+	}
+	return false
+}
 
 func (hostSystem) ids() (int, int) { return os.Getuid(), os.Getgid() }
 
