@@ -9,9 +9,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/qoryai/runner/internal/descriptor"
 	"github.com/qoryai/runner/internal/event"
@@ -78,8 +80,26 @@ type Spec struct {
 	Forwarder []string
 	// RunnerVersion is reported in the events.
 	RunnerVersion string
-	// RunID is the run's id when a parent already made one; empty means a new one.
+	// RunID is the run's id when a parent already made one; empty means a new one. It is
+	// a UUID in the canonical lower-case form, because it is the events' subject and names
+	// the run directory; anything else is refused.
 	RunID string
+	// Labels are the caller's own names for the run, its key in a queue, a repository, an
+	// issue: reported in run.started and nowhere else, so a receiver ties the run id to
+	// what it knows. At most MaxLabels; a key is 1 to 64 of a-z, 0-9, underscore, dot and
+	// dash, a value at most 256 bytes.
+	Labels map[string]string
+	// Timeout is how long the runtime may run; zero means no limit. At the limit the
+	// runtime is stopped the way the context ending stops it, and run.exited carries
+	// the reason.
+	Timeout time.Duration
+	// StopGrace is how long the runtime gets between SIGTERM and SIGKILL when the runner
+	// stops it, at the Timeout or the context's end: the time a session needs to close
+	// what it has open. Zero means DefaultStopGrace.
+	StopGrace time.Duration
+	// Limits are the resources the enclosure gives the runtime. Without a Wall they mean
+	// nothing.
+	Limits wall.Limits
 	// Heartbeat is the interval between heartbeats; zero means 30 seconds.
 	Heartbeat time.Duration
 	// Report receives one line per thing the runner tells its user; nil means Stderr.
@@ -97,6 +117,8 @@ type Result struct {
 	Signal string
 	// State is succeeded or failed.
 	State string
+	// TimedOut says the runtime was stopped at the spec's Timeout.
+	TimedOut bool
 	// Undelivered is how many events the webhook did not accept.
 	Undelivered int
 }
@@ -106,6 +128,43 @@ const (
 	EnvRunID  = "QORY_RUN_ID"
 	EnvSocket = socket.Env
 )
+
+// MaxLabels is how many labels a run may carry.
+const MaxLabels = 16
+
+// errTimeout is the cause of the runtime's context ending at the spec's Timeout.
+var errTimeout = errors.New("the run's time limit")
+
+var (
+	runIDShape    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	labelKeyShape = regexp.MustCompile(`^[a-z0-9_.-]{1,64}$`)
+)
+
+// CheckRunID refuses a caller's run id that is not a UUID in the canonical lower-case
+// form. [Run] checks it; a command checks it first to call it a mistake of its user's.
+func CheckRunID(id string) error {
+	if !runIDShape.MatchString(id) {
+		return fmt.Errorf("the run id %q is not a UUID in the canonical lower-case form", id)
+	}
+	return nil
+}
+
+// CheckLabels refuses labels the contract's schema would: too many, a key outside its
+// grammar, a value too long. [Run] checks them; a command may first.
+func CheckLabels(labels map[string]string) error {
+	if len(labels) > MaxLabels {
+		return fmt.Errorf("%d labels; a run carries at most %d", len(labels), MaxLabels)
+	}
+	for k, v := range labels {
+		if !labelKeyShape.MatchString(k) {
+			return fmt.Errorf("the label key %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", k)
+		}
+		if len(v) > 256 || !utf8.ValidString(v) {
+			return fmt.Errorf("the value of the label %s is longer than 256 bytes or not UTF-8", k)
+		}
+	}
+	return nil
+}
 
 // closeWait is how long the sinks get to flush after the runtime exits.
 const closeWait = 15 * time.Second
@@ -142,6 +201,14 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	runID := spec.RunID
 	if runID == "" {
 		runID = event.NewRunID()
+	} else if err := CheckRunID(runID); err != nil {
+		return nil, err
+	}
+	if spec.Timeout < 0 || spec.StopGrace < 0 {
+		return nil, errors.New("the timeout or the stop grace is negative")
+	}
+	if err := CheckLabels(spec.Labels); err != nil {
+		return nil, err
 	}
 	dir := filepath.Join(spec.RunsDir, runID)
 	emit := event.NewEmitter(runID, nil)
@@ -247,7 +314,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		launch, err = enclosure.Wrap(ctx, wall.Launch{
 			Command: spec.Command, Args: args, Dir: spec.Dir, Interactive: spec.Interactive,
 			Env:   environment(spec.Env, []string{EnvRunID + "=" + runID}),
-			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts,
+			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits,
 		})
 		if err != nil {
 			sinks.Close(ctx)
@@ -263,6 +330,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.Wall != nil {
 		started["wall"] = spec.Wall.Name()
 		started["image"] = spec.Image
+	}
+	if len(spec.Labels) > 0 {
+		started["labels"] = spec.Labels
 	}
 	write(event.RunStarted, started)
 	applied := map[string]any{"mode": string(pol.Policy.Egress.Mode), "allow": allow, "source": pol.Source}
@@ -281,14 +351,23 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if desc.Sources.Output == nil {
 		output = nil
 	}
-	proc := &process{command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output}
+	proc := &process{grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output}
 	stop := heartbeat(ctx, spec.Heartbeat, start, write)
+	// The limit ends the runtime and nothing else: the sinks and the wall are closed on
+	// the caller's context, as after any exit.
+	limited, cancelLimit := ctx, context.CancelFunc(func() {})
+	if spec.Timeout > 0 {
+		limited, cancelLimit = context.WithTimeoutCause(ctx, spec.Timeout, errTimeout)
+	}
 	var exit exitStatus
 	if spec.Interactive {
-		exit, err = proc.runPTY(ctx)
+		exit, err = proc.runPTY(limited)
 	} else {
-		exit, err = proc.runPipes(ctx)
+		exit, err = proc.runPipes(limited)
 	}
+	// A runtime that exited with 0 as the limit fell finished; the limit was not why.
+	timedOut := exit.code != 0 && errors.Is(context.Cause(limited), errTimeout)
+	cancelLimit()
 	stop()
 	closeSocket()
 	if err != nil {
@@ -303,13 +382,17 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if exit.signal != "" {
 		exited["signal"] = exit.signal
 	}
+	if timedOut {
+		exited["reason"] = "timeout"
+		spec.Report(fmt.Sprintf("the runtime was stopped at the limit of %s", spec.Timeout))
+	}
 	write(event.RunExited, exited)
 	closeCtx, cancel := context.WithTimeout(context.Background(), closeWait)
 	defer cancel()
 	if err := sinks.Close(closeCtx); err != nil {
 		spec.Report("closing the sinks: " + err.Error())
 	}
-	res := &Result{RunID: runID, Dir: dir, ExitCode: exit.code, Signal: exit.signal, State: state}
+	res := &Result{RunID: runID, Dir: dir, ExitCode: exit.code, Signal: exit.signal, State: state, TimedOut: timedOut}
 	if posts != nil {
 		res.Undelivered = posts.Undelivered()
 	}
@@ -326,6 +409,9 @@ func withDefaults(spec Spec) Spec {
 	}
 	if spec.Env == nil && spec.Wall == nil {
 		spec.Env = os.Environ()
+	}
+	if spec.StopGrace == 0 {
+		spec.StopGrace = DefaultStopGrace
 	}
 	if spec.Heartbeat == 0 {
 		spec.Heartbeat = 30 * time.Second

@@ -397,3 +397,118 @@ func TestContextEndStopsTheRuntime(t *testing.T) {
 		t.Errorf("result %+v", res)
 	}
 }
+
+func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "sleep 30"}
+	sp.Timeout = 300 * time.Millisecond
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.TimedOut || res.Signal != "SIGTERM" || res.State != "failed" {
+		t.Errorf("result %+v", res)
+	}
+	exited := ofType(events(t, res), "ai.qory.run.exited")
+	if len(exited) != 1 || data(exited[0])["reason"] != "timeout" {
+		t.Errorf("run.exited %v", exited)
+	}
+	// A limit that was not reached is not a reason.
+	sp = spec(t, nil)
+	sp.Timeout = time.Minute
+	if res, err = runWithSettingsEnv(t, sp); err != nil {
+		t.Fatal(err)
+	}
+	if exited := ofType(events(t, res), "ai.qory.run.exited"); res.TimedOut || data(exited[0])["reason"] != nil {
+		t.Errorf("a run within its limit timed out: %+v %v", res, exited)
+	}
+}
+
+func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
+	const id = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp := spec(t, nil)
+	sp.RunID = id
+	sp.Labels = map[string]string{"run_key": "erpy/1234", "repository": "acme/shop", "issue": "77"}
+	res, err := runWithSettingsEnv(t, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RunID != id || filepath.Base(res.Dir) != id {
+		t.Errorf("result %+v", res)
+	}
+	started := ofType(events(t, res), "ai.qory.run.started")
+	if labels, _ := data(started[0])["labels"].(map[string]any); len(labels) != 3 || labels["run_key"] != "erpy/1234" {
+		t.Errorf("run.started %v", started)
+	}
+	many := map[string]string{}
+	for i := range session.MaxLabels + 1 {
+		many[fmt.Sprint("k", i)] = "v"
+	}
+	for name, change := range map[string]func(*session.Spec){
+		"a path as the run id":  func(s *session.Spec) { s.RunID = "../../elsewhere" },
+		"an upper-case run id":  func(s *session.Spec) { s.RunID = strings.ToUpper(id) },
+		"an upper-case key":     func(s *session.Spec) { s.Labels = map[string]string{"Repo": "x"} },
+		"an empty key":          func(s *session.Spec) { s.Labels = map[string]string{"": "x"} },
+		"a long value":          func(s *session.Spec) { s.Labels = map[string]string{"k": strings.Repeat("v", 257)} },
+		"too many labels":       func(s *session.Spec) { s.Labels = many },
+		"a negative time limit": func(s *session.Spec) { s.Timeout = -time.Second },
+	} {
+		sp := spec(t, nil)
+		change(&sp)
+		if _, err := session.Run(context.Background(), sp); err == nil {
+			t.Errorf("%s: the run started", name)
+		}
+		if entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs")); len(entries) > 0 {
+			t.Errorf("%s: a run directory was made: %v", name, entries)
+		}
+	}
+}
+
+func TestPolicyUnderACeilingNarrowsOnly(t *testing.T) {
+	enforce := func(allow ...string) *session.Policy {
+		return &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: allow}}
+	}
+	observe := &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}}
+	run := enforce("api.github.com", "pypi.org")
+	if got := run.Under(nil); got != run {
+		t.Errorf("under no ceiling %+v", got)
+	}
+	if got := run.Under(observe); got != run {
+		t.Errorf("under an observing ceiling %+v", got)
+	}
+	got := run.Under(enforce("*.github.com", "api.anthropic.com"))
+	if got.Egress.Mode != "enforce" || len(got.Egress.Allow) != 1 || got.Egress.Allow[0] != "api.github.com" {
+		t.Errorf("under an enforcing ceiling %+v", got)
+	}
+	if got := observe.Under(enforce("api.anthropic.com")); got.Egress.Mode != "enforce" || len(got.Egress.Allow) != 1 {
+		t.Errorf("an observing policy under an enforcing ceiling %+v", got)
+	}
+	if _, err := session.ReadPolicy("run.yaml", []byte("version: 1\negress:\n  mode: enforce\n  allow: [api.github.com]\n")); err != nil {
+		t.Error(err)
+	}
+	if _, err := session.ReadPolicy("run.yaml", []byte("version: 1\negress:\n  mode: enforce\n  allow: [\"api.github.com:443\"]\n")); err == nil {
+		t.Error("an allow entry with a port was read")
+	}
+}
+
+func TestStopGraceIsHowLongTheRuntimeHasToLeave(t *testing.T) {
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "trap '' TERM; sleep 30 & wait; wait"}
+	sp.Timeout = 200 * time.Millisecond
+	sp.StopGrace = 300 * time.Millisecond
+	start := time.Now()
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.TimedOut || res.Signal != "SIGKILL" {
+		t.Errorf("result %+v", res)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("a runtime that ignores SIGTERM ran %s, past the grace", took)
+	}
+}

@@ -4,6 +4,37 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [Unreleased]
+
+### Added
+
+- `session.Spec.Timeout`: a time limit for the runtime. At the limit it is stopped as
+  the context ending stops it, `ai.qory.run.exited` carries `reason: timeout`, and
+  `Result.TimedOut` is set. `Spec.StopGrace` is the time between SIGTERM and SIGKILL
+  whenever the runner stops the runtime, ten seconds unless named.
+- `session.Spec.Labels`: the caller's own names for the run, reported as `labels` in
+  `ai.qory.run.started` and nowhere else. At most 16, keys of `a-z`, `0-9`, `_`, `.`
+  and `-`, values of at most 256 bytes.
+- `session.Spec.Limits` and `wall.Limits`: processors, memory, processes and the size
+  of `/dev/shm` for the agent's container, as `--cpus`, `--memory`, `--pids-limit` and
+  `--shm-size` with the Docker adapter. The relay gets none.
+- `session.ReadPolicy` and `Policy.Under`: a command reads a run's own policy file and
+  puts it under the machine's, which it can only narrow.
+
+### Changed
+
+- A `Spec.RunID` that is not a UUID in the canonical lower-case form is refused. It
+  went unchecked into the run directory's path and into the events' `subject`, which
+  the envelope's schema holds to a UUID.
+- The Docker adapter refuses a mount that is a socket, or a directory holding a
+  container runtime's socket.
+
+### Fixed
+
+- The contract's event table listed `path` in `ai.qory.run.policy_applied`, which no
+  schema and no runner has had since the policy became a value, and said every session
+  event may carry `agent_id`, which `ai.qory.session.result` cannot.
+
 ## [0.2.0] - 2026-09-17
 
 ### Added
@@ -77,4 +108,5 @@ release may change what an existing document does, and says so under Upgrading.
   It names the policy's `egress.allow` grammar as the one definition of a declared host,
   which the harness contract copies.
 
+[Unreleased]: https://github.com/qoryai/runner/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/qoryai/runner/compare/v0.1.0...v0.2.0

@@ -31,6 +31,8 @@ type process struct {
 	stderr  io.Writer
 	// logs returns the chunk consumer for a stream.
 	logs func(stream string) func([]byte)
+	// grace is how long the process gets after SIGTERM before SIGKILL.
+	grace time.Duration
 	// output takes each JSON object the runtime prints as a line; nil when the
 	// runtime has no output source.
 	output func(map[string]any)
@@ -42,18 +44,18 @@ type exitStatus struct {
 	signal string
 }
 
-// termGrace is how long the runtime gets after SIGTERM before SIGKILL, when the
-// context ends.
-const termGrace = 10 * time.Second
+// DefaultStopGrace is how long the runtime gets after SIGTERM before SIGKILL, when the
+// context ends or the limit is reached, unless the spec names another.
+const DefaultStopGrace = 10 * time.Second
 
 // newCmd builds the command with the context ending it: SIGTERM, then SIGKILL after
-// termGrace.
+// the grace.
 func (p *process) newCmd(ctx context.Context) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, p.command, p.args...)
 	cmd.Env = p.env
 	cmd.Dir = p.dir
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = termGrace
+	cmd.WaitDelay = p.grace
 	return cmd
 }
 

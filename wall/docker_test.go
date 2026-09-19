@@ -42,6 +42,7 @@ func (r *recorder) local(string) bool        { return r.local_ }
 func (r *recorder) tempDir() (string, error) { return r.t.TempDir(), nil }
 func (r *recorder) ids() (int, int)          { return r.uid, 1000 }
 func (r *recorder) checkHelper(string) error { return nil }
+func (r *recorder) socket(p string) bool     { return strings.HasSuffix(p, ".sock") }
 
 const runID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 
@@ -226,5 +227,49 @@ func TestDockerRefusesAPathItCannotMount(t *testing.T) {
 		if _, err := e.Wrap(context.Background(), l); err == nil {
 			t.Errorf("%q was written to the environment file", env)
 		}
+	}
+}
+
+// TestDockerLimitsTheAgentAndRefusesASocket pins that the run's limits reach the
+// agent's command line and not the relay's, that a limit in no known shape is refused,
+// and that a socket is never mounted.
+func TestDockerLimitsTheAgentAndRefusesASocket(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", uid: 1000}
+	d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "i"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close(context.Background())
+	l := launch()
+	l.Limits = Limits{CPUs: "1.5", Memory: "8g", PIDs: 4096, ShmSize: "2g"}
+	got, err := e.Wrap(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line := words(got.Args); !strings.Contains(line, "--cpus 1.5 --memory 8g --shm-size 2g --pids-limit 4096") {
+		t.Errorf("the agent's command carries no limits: %s", line)
+	}
+	for _, line := range rec.lines {
+		if strings.Contains(line, "--cpus") {
+			t.Errorf("a limit on a command of the wall's own: %s", line)
+		}
+	}
+	for name, lim := range map[string]Limits{
+		"a flag as cpus":   {CPUs: "--privileged"},
+		"a unit of t":      {Memory: "1t"},
+		"a flag as shm":    {ShmSize: "-1"},
+		"a negative count": {PIDs: -1},
+	} {
+		l = launch()
+		l.Limits = lim
+		if _, err := e.Wrap(context.Background(), l); err == nil {
+			t.Errorf("%s: the limit was accepted", name)
+		}
+	}
+	l = launch()
+	l.Mounts = append(l.Mounts, Mount{Path: "/var/run/docker.sock"})
+	if _, err := e.Wrap(context.Background(), l); err == nil {
+		t.Error("the engine's socket was mounted")
 	}
 }

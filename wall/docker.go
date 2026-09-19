@@ -74,6 +74,9 @@ type system interface {
 	tempDir() (string, error)
 	// ids are this process's user and group.
 	ids() (int, int)
+	// socket reports whether the path is a socket, or a directory that holds a
+	// container runtime's.
+	socket(path string) bool
 	// checkHelper refuses a helper that cannot run in a Linux container.
 	checkHelper(path string) error
 }
@@ -86,6 +89,8 @@ var (
 	imageShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
 	userShape  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?$`)
 	envShape   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+	cpusShape  = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+	bytesShape = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
 )
 
 // Name is docker, or the command's name when another was given.
@@ -230,6 +235,10 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if err != nil {
 		return Launch{}, err
 	}
+	limits, err := limits(l.Limits)
+	if err != nil {
+		return Launch{}, err
+	}
 	// Everything that can be refused is, before anything is started.
 	env := append([]string(nil), l.Env...)
 	env = append(env, proxy.EnvFor(fmt.Sprintf("http://%s:%d", relayAlias, relayPort))...)
@@ -271,6 +280,7 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	}
 	run = append(run, "--name", e.agent(), "--label", e.label(), "--network", e.inside())
 	run = append(run, e.hardening()...)
+	run = append(run, limits...)
 	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
 	for _, m := range mounts {
 		run = append(run, "--mount", m)
@@ -291,6 +301,9 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 		if !filepath.IsAbs(m.Path) {
 			return nil, fmt.Errorf("wall docker: the mount %q is not an absolute path", m.Path)
 		}
+		if e.sys.socket(m.Path) {
+			return nil, fmt.Errorf("wall docker: the mount %q is a socket or holds a container runtime's, which an enclosure never gets", m.Path)
+		}
 		binds = append(binds, bind{m.Path, m.Path, m.ReadOnly})
 	}
 	if l.Socket != "" {
@@ -309,6 +322,33 @@ func (e *dockerEnclosure) mounts(l Launch) ([]string, error) {
 			return nil, err
 		}
 		out = append(out, m)
+	}
+	return out, nil
+}
+
+// limits are the agent's resource flags. The relay gets none: it is the runner's own.
+func limits(l Limits) ([]string, error) {
+	var out []string
+	if l.CPUs != "" {
+		if !cpusShape.MatchString(l.CPUs) {
+			return nil, fmt.Errorf("wall docker: the cpus limit %q is not a decimal number", l.CPUs)
+		}
+		out = append(out, "--cpus", l.CPUs)
+	}
+	for _, f := range []struct{ flag, name, value string }{{"--memory", "memory", l.Memory}, {"--shm-size", "shm size", l.ShmSize}} {
+		if f.value == "" {
+			continue
+		}
+		if !bytesShape.MatchString(f.value) {
+			return nil, fmt.Errorf("wall docker: the %s %q is not a number of bytes with a unit of b, k, m or g", f.name, f.value)
+		}
+		out = append(out, f.flag, f.value)
+	}
+	if l.PIDs < 0 {
+		return nil, fmt.Errorf("wall docker: the pids limit %d is negative", l.PIDs)
+	}
+	if l.PIDs > 0 {
+		out = append(out, "--pids-limit", strconv.Itoa(l.PIDs))
 	}
 	return out, nil
 }
@@ -433,6 +473,31 @@ func (hostSystem) local(ip string) bool {
 }
 
 func (hostSystem) tempDir() (string, error) { return os.MkdirTemp("", "qory-wall-") }
+
+// runtimeSockets are the names a container runtime's socket goes by.
+var runtimeSockets = []string{"docker.sock", "podman/podman.sock", "containerd/containerd.sock", "crio/crio.sock"}
+
+func (hostSystem) socket(p string) bool {
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		p = real
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSocket != 0 {
+		return true
+	}
+	if !info.IsDir() {
+		return false
+	}
+	for _, name := range runtimeSockets {
+		if s, err := os.Stat(filepath.Join(p, name)); err == nil && s.Mode()&os.ModeSocket != 0 {
+			return true
+		}
+	}
+	return false
+}
 
 func (hostSystem) ids() (int, int) { return os.Getuid(), os.Getgid() }
 

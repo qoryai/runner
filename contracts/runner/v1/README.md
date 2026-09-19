@@ -143,6 +143,19 @@ One run, on a developer machine, with a webhook configured:
    flush, reports what the webhook did not accept, and returns the program's exit
    status. A runtime killed by a signal exits as `-1` with the signal named.
 
+A run may have a time limit. When the runtime still runs at the limit the runner stops
+it, SIGTERM and SIGKILL after a grace the run names, ten seconds unless it does, and `ai.qory.run.exited` carries `reason:
+timeout` with the state `failed`; step 9 is otherwise the same. A denied connection
+never ends a run; the limit is the one thing of the runner's that does.
+
+The run id is the runner's own, a UUID version 7, unless the caller already holds one: a
+caller's id is a UUID in the canonical lower-case form, since it is every event's
+`subject` and names the run directory, and anything else is no run. What else the caller
+knows the run by, a key in its queue, a repository, an issue, goes in `labels` on
+`ai.qory.run.started`: at most 16, a key of 1 to 64 of `a-z`, `0-9`, `_`, `.` and `-`, a
+value of at most 256 bytes. The runner copies them and reads nothing into them, and no
+other event repeats them: a receiver joins on `subject`.
+
 Behind a wall, three steps differ and no event does. Before step 5 the runner asks the
 wall to prepare the enclosure and listens where the enclosure says, not on loopback.
 After step 6 it hands the wall the launch, the proxy's address, the socket and the
@@ -221,12 +234,12 @@ The types, one namespace. The runner's own:
 | Type | When | Data |
 |---|---|---|
 | `ai.qory.ping` | before the runtime starts, to the webhook only, when one is configured | `runner_version`, `events` |
-| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, and behind a wall `wall`, `image` |
-| `ai.qory.run.policy_applied` | right after, once | `mode`, `allow`, `source`, `path`, `digest`, `declared` |
+| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
+| `ai.qory.run.policy_applied` | right after, once | `mode`, `allow`, `source`, `digest`, `declared` |
 | `ai.qory.run.log` | one per chunk of output: one line or 4096 bytes, whichever comes first | `stream`, `bytes` |
 | `ai.qory.run.egress` | one per connection through the proxy, allowed or denied | `host`, `port`, `method`, `decision`, `mode`, `rule` |
 | `ai.qory.run.heartbeat` | every `interval_seconds` while the runtime runs | `elapsed_seconds`, `interval_seconds` |
-| `ai.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `duration_ms` |
+| `ai.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
 
 The session's, produced by a descriptor from what the runtime reports:
 
@@ -245,8 +258,9 @@ The session's, produced by a descriptor from what the runtime reports:
 | `ai.qory.session.ended` | the runtime closed its session | `session_id`, `reason` |
 | `ai.qory.session.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
 
-Every session event may carry `agent_id` and `agent_type` when it happened inside a
-subagent. The schema of each type, under `events/`, says which fields are required and
+Every session event that comes from a hook may carry `agent_id` and `agent_type` when
+it happened inside a subagent; `ai.qory.session.result`, read from the runtime's output,
+carries neither. The schema of each type, under `events/`, says which fields are required and
 what each holds. Values are copied from the runtime unchanged: `input` and `response`
 have the shape the tool gave them, `error` is display text, and the enumerations in
 `source`, `reason`, `kind`, `outcome` are the runtime's words.
@@ -406,7 +420,13 @@ for all of them.
 - a user that is not root, no added capabilities, no privileged mode, no host
   namespaces;
 - never the container runtime's own socket: a process that can ask the daemon for a
-  container on the host's network has left the wall.
+  container on the host's network has left the wall. A mount that is a socket, or a
+  directory holding a runtime's, is refused.
+
+A run may name limits on what the agent uses, processors, memory, processes and the
+size of `/dev/shm`; an adapter passes them to its engine and a run that names none gets
+the engine's defaults. They are no guarantee of the wall's: they keep one run from
+starving a machine, not an agent inside.
 
 The proxy is part of the list, because it dials from outside on behalf of what is
 inside: behind a wall it is **guarded**, and what is on the runner's machine is not

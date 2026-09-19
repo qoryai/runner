@@ -71,6 +71,24 @@ type Launch struct {
 	// checkout around Dir, a composed home, the run directory read-only. The
 	// enclosure shows each at the same path, and nothing of the host besides them.
 	Mounts []Mount
+	// Limits are the resources the agent gets; the zero value leaves each to the
+	// adapter's engine.
+	Limits Limits
+}
+
+// Limits are the resources an enclosure gives the agent. A zero field is no limit of
+// the run's: the engine's own default stands.
+type Limits struct {
+	// CPUs is how many processors' worth of time, a decimal number: 2, 1.5.
+	CPUs string
+	// Memory is the most memory, a number of bytes with an optional unit of b, k, m or
+	// g: 8g.
+	Memory string
+	// PIDs is the most processes and threads.
+	PIDs int
+	// ShmSize is the size of /dev/shm, written as Memory is. A browser needs more than
+	// an engine's default.
+	ShmSize string
 }
 
 // Mount is one file or directory of the host an enclosure shows, at the same path.

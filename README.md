@@ -100,6 +100,9 @@ res, err := session.Run(ctx, session.Spec{
 	Dir:     checkout,                            // the workspace, mounted at its own path
 	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
 	Image:   "example.com/agent:1",               // yours: the runtime and the toolchain
+	Limits:  wall.Limits{Memory: "8g", ShmSize: "2g"},  // what the agent may use; zero is the engine's default
+	Timeout: 5 * time.Hour,                       // the runtime is stopped at it; run.exited says so
+	Labels:  map[string]string{"issue": "77"},    // the caller's names for the run, in run.started
 	Wall: &wall.Docker{
 		Helper:    linuxBuild,                    // a static Linux build of this program
 		RelayArgs: []string{"relay"},             // the mode of it that calls wall.Relay
