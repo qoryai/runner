@@ -434,7 +434,7 @@ func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
 	const id = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
 	sp := spec(t, nil)
 	sp.RunID = id
-	sp.Labels = map[string]string{"run_key": "erpy/1234", "repository": "acme/shop", "issue": "77"}
+	sp.Labels = map[string]string{"run_key": "queue/1234", "repository": "acme/shop", "issue": "77"}
 	res, err := runWithSettingsEnv(t, sp)
 	if err != nil {
 		t.Fatal(err)
@@ -443,7 +443,7 @@ func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
 		t.Errorf("result %+v", res)
 	}
 	started := ofType(events(t, res), "ai.qory.run.started")
-	if labels, _ := data(started[0])["labels"].(map[string]any); len(labels) != 3 || labels["run_key"] != "erpy/1234" {
+	if labels, _ := data(started[0])["labels"].(map[string]any); len(labels) != 3 || labels["run_key"] != "queue/1234" {
 		t.Errorf("run.started %v", started)
 	}
 	many := map[string]string{}
