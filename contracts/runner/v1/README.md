@@ -248,6 +248,16 @@ asked of upstream is the one the connection was opened to and decided on, whatev
 `Host` a request names. A denial is a `403` naming the method, the host and the path.
 A plain request is held to the same paths and never carries a credential.
 
+*Reading without writing.* Paths say what a run does on a host as well as where. git
+over HTTPS asks three paths of a repository, on any host that serves it:
+`/<repo>.git/info/refs`, then `/<repo>.git/git-upload-pack` for a fetch or
+`/<repo>.git/git-receive-pack` for a push. A run given the first two and not the third
+clones and fetches, with the credential set, and its push is refused before it leaves
+the machine: git reports `HTTP 403` and fails, the record holds the denied `POST`, and
+nothing reaches the repository, whatever the token itself may do. Rules match the path
+and never the query, so the `info/refs` a push asks first is allowed; it lists what a
+fetch already saw.
+
 ## Credentials
 
 A credential is a token the runner holds for the session and the session never holds.
