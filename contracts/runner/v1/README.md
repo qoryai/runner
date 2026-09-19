@@ -143,10 +143,11 @@ One run, on a developer machine, with a webhook configured:
    `NO_PROXY=localhost,127.0.0.1,::1` so a local MCP server or model endpoint still
    answers. It opens the local socket and sets `QORY_RUN_SOCKET` to its path and
    `QORY_RUN_ID` to the run id. Nothing else of the runner's enters the environment.
-6. It installs the runtime descriptor's hooks: its forwarder as a command hook for each
-   event the descriptor lists, added to a copy of the settings file the launch passes,
-   written as `settings.json` in the run directory and named in its place. The composed
-   home is not modified.
+6. It has the runtime prepare the launch (§The runtime): for a runtime that takes hooks,
+   the runner's forwarder as a command hook for each event the runtime lists. For Claude
+   Code that is a copy of the settings file the launch passes, written as
+   `settings.json` in the run directory and named in its place. What is prepared goes
+   into the run directory; the composed home is not modified.
 7. It emits `ai.qory.run.started` and `ai.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when interactive, on pipes otherwise.
 8. While the program runs: every chunk of output is one `ai.qory.run.log`; every
@@ -163,12 +164,12 @@ is otherwise the same. A denied connection
 never ends a run; the limit is the one thing of the runner's that does.
 
 The runner stops a runtime the same way at the limit and when its own context ends: a
-signal that asks the runtime to leave, then SIGKILL after a grace. Both are the run's to
-name, SIGTERM and ten seconds unless it does. The signal is one of SIGTERM, SIGINT,
-SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2, since runtimes differ in what each means: one
-closes its session on SIGINT and drops it on SIGTERM, another the other way round, and a
-runner that knew which would know a runtime. Behind a wall the enclosure passes the same
-signal on to the runtime inside.
+signal that asks the runtime to leave, then SIGKILL after a grace. The signal is one of
+SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2, since runtimes differ in what
+each means: one closes its session on SIGINT and drops it on SIGTERM, another the other
+way round. So the runtime says which and how long (§The runtime), the run may name
+others over it, and with neither it is SIGTERM and ten seconds. Behind a wall the
+enclosure passes the same signal on to the runtime inside.
 
 The run id is the runner's own, a UUID version 7, unless the caller already holds one: a
 caller's id is a UUID in the canonical lower-case form, since it is every event's
@@ -493,18 +494,46 @@ that verifies the signature, deduplicates and appends to a file, which the modul
 run the webhook sink against. It is not a public package and no command ships it; a
 receiver written by anyone else follows this section, and may read that code.
 
-## The runtime descriptor
+## The runtime
 
-`descriptor.schema.json`. One YAML file per runtime under `runtimes/<name>/`, embedded
-in the binary as the default and overridden by `<name>.yaml` in a directory the command
-names, `~/.config/qory/runtimes/` for `qory`. It has three parts.
+The runner starts a program, records it and stops it, and knows no program. What is
+particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
+enclosure is behind `wall.Wall`, and Claude Code is one implementation of it among the
+ones there may be. A runtime answers five things: its name and the version of the
+program it was written against, reported in `ai.qory.run.started`; how a launch is
+prepared so the program reports to the runner, which may change the arguments, add
+variables and write into the run directory and nothing else; whether the program's
+standard output is records to read; what event, if any, one record is; and how the
+program is asked to leave, a signal and a grace.
+
+There are three ways to a runtime, and a name resolves to the first that applies:
+
+1. **A descriptor**, a runtime written as data (below): `<name>.yaml` in a directory
+   the command names, `~/.config/qory/runtimes/` for `qory`, then the one this contract
+   ships under `runtimes/<name>/`. Nothing of a descriptor runs, so a machine adds a
+   runtime or corrects one without a new binary.
+2. **A bare runtime**, for a name nothing describes. Nothing is prepared and no record
+   is read: the run's own events, its log and its egress record are all there, the
+   session's are not. Any program runs behind a wall this way from the first day.
+3. **An implementation in Go**, for a caller that embeds the runner and whose program
+   needs what a descriptor cannot say. It is given to `session.Spec.Runtime` like any
+   other.
+
+`runtimes/runtimetest` is what any of them is held to: `Conforms`, that a runtime leaves
+alone what is not its own, and `Replays`, that its records produce exactly the recorded
+events and that each passes this contract's schema.
+
+### The descriptor
+
+`descriptor.schema.json`. One YAML file per runtime. It has four parts.
 
 **Sources**: how the runner attaches. The terminal bytes always, with nothing to match
 in them and so no source. `output`: JSON lines on the runtime's standard output, when the
 session runs on pipes; a line that is not a JSON object is not a record. `hooks`: the
 runtime's hook events, for each of which the runner installs its forwarder as a command
-hook, the way `install` names among the installers the binary has; `claude-settings`
-adds a group per event under `hooks` in the JSON settings the launch passes with
+hook, the way `install` names among the installers the binary has: a descriptor names
+an installer and never brings one, so a program that takes hooks another way needs an
+installer in the runner before a descriptor can name it. `claude-settings` adds a group per event under `hooks` in the JSON settings the launch passes with
 `--settings`, leaving the groups already there. The forwarder writes the JSON it read on
 its standard input to the local socket, as one record. A forwarder exits 0 and prints
 nothing, which every hook interface reads as no decision, so an installed hook observes
@@ -519,11 +548,14 @@ event; a record no rule matches produces nothing. No patterns, no expressions, n
 defaults, no concatenation. If equality and presence prove too narrow, the next step is
 a bounded expression language, and before that a runner change.
 
+**Stop**, optional: `signal`, one of the six above, and `grace`, a duration. It is how a
+runtime that closes its session on one signal and drops it on another says which.
+
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
 per event the rules produce from them, in order. A descriptor without fixtures is not
 accepted. The tests validate every record and every expected event against the schemas;
-the session package replays the records through the rules and compares.
+`runtimetest.Replays` replays the records through the runtime and compares.
 
 `runtimes/claude/descriptor.yaml` is the Claude Code descriptor, written against version
 2.1.273 as installed and its published hooks reference. Its hooks are the canonical

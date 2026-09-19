@@ -21,6 +21,8 @@ import (
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/receiver"
 	"github.com/qoryai/runner/internal/socket"
+	"github.com/qoryai/runner/runtimes"
+	"github.com/qoryai/runner/runtimes/claude"
 	"github.com/qoryai/runner/session"
 )
 
@@ -108,7 +110,7 @@ func spec(t *testing.T, pol *session.Policy, env ...string) session.Spec {
 		}
 	})
 	return session.Spec{
-		Runtime:       "claude",
+		Runtime:       claudeCode(t),
 		Command:       os.Args[0],
 		Args:          []string{"--settings", writeSettings(t, dir)},
 		Env:           append([]string{"QORY_TEST_RUNTIME=1", "PATH=" + os.Getenv("PATH")}, env...),
@@ -122,6 +124,17 @@ func spec(t *testing.T, pol *session.Policy, env ...string) session.Spec {
 		Heartbeat:     10 * time.Millisecond,
 		Report:        func(l string) { t.Log("report:", l) },
 	}
+}
+
+// claudeCode is the runtime most tests run as: the contract's descriptor for Claude
+// Code, in front of a program of the test's own.
+func claudeCode(t *testing.T) runtimes.Runtime {
+	t.Helper()
+	rt, err := claude.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt
 }
 
 func writeSettings(t *testing.T, dir string) string {
@@ -623,4 +636,74 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 	}
 	stop()
 	<-done
+}
+
+// leaves is a runtime of the test's own, to show that the session asks the interface
+// and knows no runtime: it prepares nothing, reads nothing, and names how it is asked to
+// leave.
+type leaves struct {
+	runtimes.Runtime
+	stop     runtimes.Stop
+	prepared *runtimes.Attach
+}
+
+func (l leaves) Stop() runtimes.Stop { return l.stop }
+func (l leaves) Prepare(a runtimes.Attach) (runtimes.Launch, error) {
+	*l.prepared = a
+	launch := a.Launch
+	launch.Env = []string{"ADDED_BY_THE_RUNTIME=yes"}
+	return launch, nil
+}
+
+func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T) {
+	script := `test "$ADDED_BY_THE_RUNTIME" = yes || exit 9; trap 'exit 7' INT; trap 'exit 8' HUP; trap '' TERM; sleep 30 & wait`
+	for name, c := range map[string]struct {
+		named string
+		code  int
+	}{"the runtime's": {"", 7}, "the run's": {"SIGHUP", 8}} {
+		t.Run(name, func(t *testing.T) {
+			sp := spec(t, nil)
+			var got runtimes.Attach
+			sp.Runtime = leaves{Runtime: runtimes.Bare("other-agent"), stop: runtimes.Stop{Signal: "SIGINT", Grace: 20 * time.Second}, prepared: &got}
+			sp.Command, sp.Args = "sh", []string{"-c", script}
+			sp.Timeout = 300 * time.Millisecond
+			sp.StopSignal = c.named
+			res, err := session.Run(context.Background(), sp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.TimedOut || res.ExitCode != c.code {
+				t.Errorf("result %+v", res)
+			}
+			if got.RunDir != res.Dir || got.Launch.Command != "sh" || len(got.Forwarder) == 0 {
+				t.Errorf("Prepare was given %+v", got)
+			}
+			started := ofType(events(t, res), "ai.qory.run.started")
+			if len(started) != 1 || data(started[0])["runtime"] != "other-agent" {
+				t.Errorf("run.started %v", started)
+			}
+		})
+	}
+	sp := spec(t, nil)
+	sp.Runtime = leaves{Runtime: runtimes.Bare("other-agent"), stop: runtimes.Stop{Signal: "SIGKILL"}, prepared: new(runtimes.Attach)}
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "runtime other-agent") {
+		t.Errorf("a runtime that names SIGKILL: %v", err)
+	}
+}
+
+func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
+	sp := spec(t, nil)
+	sp.Runtime = nil
+	sp.Command, sp.Args = "sh", []string{"-c", "exit 3"}
+	res, err := session.Run(context.Background(), sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := ofType(events(t, res), "ai.qory.run.started")
+	if res.ExitCode != 3 || len(started) != 1 || data(started[0])["runtime"] != "sh" {
+		t.Errorf("%+v %v", res, started)
+	}
+	if _, err := os.Stat(filepath.Join(res.Dir, "settings.json")); !os.IsNotExist(err) {
+		t.Error("something was prepared for a runtime the runner does not know")
+	}
 }

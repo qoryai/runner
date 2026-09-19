@@ -18,8 +18,6 @@ package descriptor
 import (
 	"encoding/json"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -34,7 +32,15 @@ type Descriptor struct {
 	Runtime        string  `yaml:"runtime" json:"runtime"`
 	RuntimeVersion string  `yaml:"runtime_version" json:"runtime_version"`
 	Sources        Sources `yaml:"sources" json:"sources"`
+	Stop           *Stop   `yaml:"stop" json:"stop,omitempty"`
 	Rules          []Rule  `yaml:"rules" json:"rules"`
+}
+
+// Stop is how the runtime is asked to leave: a signal of the runner's list and the time
+// until SIGKILL, as a duration. Either may be empty, the runner's default.
+type Stop struct {
+	Signal string `yaml:"signal" json:"signal,omitempty"`
+	Grace  string `yaml:"grace" json:"grace,omitempty"`
 }
 
 // Sources is how the runner attaches to the runtime.
@@ -82,28 +88,6 @@ const (
 	SourceOutput = "output"
 	SourceHooks  = "hooks"
 )
-
-// Load returns the descriptor for a runtime: the file <dir>/<runtime>.yaml when dir is
-// not empty and the file exists, else the contract's embedded default under
-// runtimes/<runtime>/descriptor.yaml. A runtime with neither is an error naming it.
-func Load(runtime, dir string) (*Descriptor, error) {
-	if dir != "" {
-		p := filepath.Join(dir, runtime+".yaml")
-		b, err := os.ReadFile(p)
-		if err == nil {
-			return Parse(p, b)
-		}
-		if !os.IsNotExist(err) {
-			return nil, err
-		}
-	}
-	p := "runtimes/" + runtime + "/descriptor.yaml"
-	b, err := fs.ReadFile(contracts.FS, p)
-	if err != nil {
-		return nil, fmt.Errorf("no descriptor for runtime %q: %w", runtime, err)
-	}
-	return Parse(p, b)
-}
 
 // Parse validates a descriptor document against the schema and decodes it. name is
 // used in messages and chooses YAML or JSON by its extension.

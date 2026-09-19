@@ -17,20 +17,23 @@ import (
 	"unicode/utf8"
 
 	"github.com/qoryai/runner/internal/credential"
-	"github.com/qoryai/runner/internal/descriptor"
 	"github.com/qoryai/runner/internal/event"
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/proxy"
 	"github.com/qoryai/runner/internal/sink"
 	"github.com/qoryai/runner/internal/socket"
 	"github.com/qoryai/runner/internal/webhook"
+	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/wall"
 )
 
 // Spec is what one run is given.
 type Spec struct {
-	// Runtime names the descriptor: claude, codex.
-	Runtime string
+	// Runtime is the program that is run: what is prepared before it starts, what its
+	// records mean and how it is asked to leave. The catalog package resolves a name to
+	// one. Nil means a bare runtime named after the Command: the run is recorded, the
+	// session inside it is not.
+	Runtime runtimes.Runtime
 	// Command, Args, Env and Dir are what to start. A nil Env is the process's own, or
 	// nothing under a Wall, where only what Env lists goes in; an empty Dir is the
 	// working directory.
@@ -80,9 +83,7 @@ type Spec struct {
 	Declared []string
 	// RunsDir holds the run directories; empty means Dir/.qory/runs.
 	RunsDir string
-	// Descriptors is a directory of descriptor overrides, <runtime>.yaml; may be empty.
-	Descriptors string
-	// Forwarder is the command the runner installs as the runtime's hook: it reads the
+	// Forwarder is the command the Runtime installs as the program's hook: it reads the
 	// hook's input and forwards it to the socket. Empty means no hooks are installed.
 	Forwarder []string
 	// RunnerVersion is reported in the events.
@@ -103,10 +104,12 @@ type Spec struct {
 	// StopSignal is the signal that asks the runtime to leave when the runner stops it,
 	// at the Timeout or the context's end: one CheckStopSignal passes. A runtime may
 	// close a session on one signal and drop it on another, and which is the runtime's
-	// to say, not the runner's. Empty means DefaultStopSignal.
+	// to say, not the runner's. Empty means the Runtime's, and DefaultStopSignal when it
+	// names none.
 	StopSignal string
 	// StopGrace is how long the runtime gets between the stop signal and SIGKILL: the
-	// time a session needs to close what it has open. Zero means DefaultStopGrace.
+	// time a session needs to close what it has open. Zero means the Runtime's, and
+	// DefaultStopGrace when it names none.
 	StopGrace time.Duration
 	// Limits are the resources the enclosure gives the runtime. Without a Wall they mean
 	// nothing.
@@ -202,9 +205,25 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			return nil, err
 		}
 	}
-	desc, err := descriptor.Load(spec.Runtime, spec.Descriptors)
-	if err != nil {
-		return nil, err
+	rt := spec.Runtime
+	if rt == nil {
+		rt = runtimes.Bare(filepath.Base(spec.Command))
+	}
+	leave := rt.Stop()
+	if err := CheckStopSignal(leave.Signal); err != nil {
+		return nil, fmt.Errorf("runtime %s: %w", rt.Name(), err)
+	}
+	if spec.StopSignal == "" {
+		spec.StopSignal = leave.Signal
+	}
+	if spec.StopGrace == 0 && leave.Grace > 0 {
+		spec.StopGrace = leave.Grace
+	}
+	if spec.StopSignal == "" {
+		spec.StopSignal = DefaultStopSignal
+	}
+	if spec.StopGrace == 0 {
+		spec.StopGrace = DefaultStopGrace
 	}
 	if spec.Wall != nil && spec.ProxyBind != "" {
 		return nil, errors.New("the spec names a wall and a proxy address; the wall names its own")
@@ -357,8 +376,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		sinks.Close(ctx)
 		return nil, err
 	}
-	records := func(r descriptor.Record) {
-		if typ, data, ok := desc.Map(r); ok {
+	records := func(r runtimes.Record) {
+		if typ, data, ok := rt.Map(r); ok {
 			write(typ, data)
 		}
 	}
@@ -366,27 +385,26 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	closeSocket := sync.OnceFunc(func() { sock.Close() })
 	defer closeSocket()
 
-	args := spec.Args
+	prepared := runtimes.Launch{Command: spec.Command, Args: spec.Args}
 	// The run directory goes in read-only, over whatever mount holds it: the settings
 	// are read from it, and the record in it is not the agent's to rewrite.
 	mounts := append(append([]wall.Mount(nil), spec.Mounts...), wall.Mount{Path: dir, ReadOnly: true})
-	if desc.Sources.Hooks != nil && len(spec.Forwarder) > 0 {
-		if args, _, err = installHooks(desc.Sources.Hooks, args, dir, spec.Forwarder); err != nil {
-			sinks.Close(ctx)
-			return nil, err
-		}
+	if prepared, err = rt.Prepare(runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: spec.Interactive}); err != nil {
+		sinks.Close(ctx)
+		return nil, fmt.Errorf("runtime %s: %w", rt.Name(), err)
 	}
+	command, args := prepared.Command, prepared.Args
 	// What is started: the runtime itself, or under a wall the adapter's command that
 	// starts it inside, which sets the proxy and socket variables by the addresses the
 	// enclosure reaches them on.
 	launch := wall.Launch{
-		Command: spec.Command, Args: args, Dir: spec.Dir,
-		Env: environment(spec.Env, px.Env(), []string{EnvSocket + "=" + sock.Path(), EnvRunID + "=" + runID}),
+		Command: command, Args: args, Dir: spec.Dir,
+		Env: environment(spec.Env, prepared.Env, px.Env(), []string{EnvSocket + "=" + sock.Path(), EnvRunID + "=" + runID}),
 	}
 	if enclosure != nil {
 		launch, err = enclosure.Wrap(ctx, wall.Launch{
-			Command: spec.Command, Args: args, Dir: spec.Dir, Interactive: spec.Interactive,
-			Env:   environment(spec.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders)),
+			Command: command, Args: args, Dir: spec.Dir, Interactive: spec.Interactive,
+			Env:   environment(spec.Env, prepared.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders)),
 			CA:    authority,
 			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits, ProxyToken: token,
 		})
@@ -398,8 +416,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 
 	start := time.Now()
 	started := map[string]any{
-		"runtime": spec.Runtime, "runtime_version": desc.RuntimeVersion, "command": spec.Command, "args": args,
+		"runtime": rt.Name(), "command": command, "args": args,
 		"dir": spec.Dir, "interactive": spec.Interactive, "runner_version": spec.RunnerVersion, "host": hostname(),
+	}
+	if v := rt.Version(); v != "" {
+		started["runtime_version"] = v
 	}
 	if spec.Wall != nil {
 		started["wall"] = spec.Wall.Name()
@@ -437,8 +458,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	logs := func(stream string) func([]byte) {
 		return func(b []byte) { write(event.RunLog, map[string]any{"stream": stream, "bytes": encode(b)}) }
 	}
-	output := func(r map[string]any) { records(descriptor.Record{Source: descriptor.SourceOutput, Record: r}) }
-	if desc.Sources.Output == nil {
+	output := func(r map[string]any) { records(runtimes.Record{Source: runtimes.SourceOutput, Record: r}) }
+	if !rt.ReadsOutput() {
 		output = nil
 	}
 	proc := &process{stop: stopSignals[spec.StopSignal], grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output}
@@ -499,12 +520,6 @@ func withDefaults(spec Spec) Spec {
 	}
 	if spec.Env == nil && spec.Wall == nil {
 		spec.Env = os.Environ()
-	}
-	if spec.StopSignal == "" {
-		spec.StopSignal = DefaultStopSignal
-	}
-	if spec.StopGrace == 0 {
-		spec.StopGrace = DefaultStopGrace
 	}
 	if spec.Heartbeat == 0 {
 		spec.Heartbeat = 30 * time.Second

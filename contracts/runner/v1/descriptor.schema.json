@@ -76,6 +76,23 @@
         }
       }
     },
+    "stop": {
+      "description": "How the runtime is asked to leave when the runner stops it, at a run's time limit or when the runner itself is stopped. Runtimes differ in what a signal means, one closes its session on SIGINT and drops it on SIGTERM, and this is where one says so. A run that names a signal or a grace of its own overrides it; absent, SIGTERM and ten seconds.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "signal": {
+          "description": "The signal that asks the runtime to leave, among the ones the runner sends.",
+          "enum": ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2"]
+        },
+        "grace": {
+          "description": "How long the runtime has after the signal before SIGKILL, as a duration: 30s.",
+          "type": "string",
+          "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|ms|s|m|h))+$"
+        }
+      }
+    },
     "rules": {
       "description": "Evaluated in order against every record of the named source; the first rule whose match holds produces one event, and a record no rule matches produces nothing.",
       "type": "array",

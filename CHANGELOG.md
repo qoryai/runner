@@ -11,6 +11,16 @@ release may change what an existing document does, and says so under Upgrading.
 - `session.Spec.Timeout`: a time limit for the runtime. At the limit it is stopped as
   the context ending stops it, `ai.qory.run.exited` carries `reason: timeout`, and
   `Result.TimedOut` is set.
+- `runtimes.Runtime`: the boundary between the runner and the program it runs, as
+  `wall.Wall` is for an enclosure. A runtime says how a launch is prepared, what its
+  records mean and how it is asked to leave; the session package knows no program.
+  `runtimes.Described` is a runtime written as a descriptor, `runtimes.Bare` a program
+  the runner runs and does not read, `runtimes/claude` Claude Code, and
+  `runtimes/catalog.Lookup` resolves a name: the machine's descriptor, the contract's,
+  or bare, so any program runs behind a wall. `runtimes/runtimetest` is the conformance
+  suite, `Conforms` and `Replays`.
+- The descriptor's `stop` section, `signal` and `grace`: how a runtime is asked to
+  leave. A run's own `StopSignal` and `StopGrace` override it.
 - `session.Spec.StopSignal` and `Spec.StopGrace`: how the runner stops a runtime, at the
   limit or when its context ends. The signal is one of SIGTERM, SIGINT, SIGHUP, SIGQUIT,
   SIGUSR1 and SIGUSR2, SIGTERM unless named, since a runtime may close its session on one

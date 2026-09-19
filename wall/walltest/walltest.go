@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/internal/credential"
+	"github.com/qoryai/runner/runtimes/claude"
 	"github.com/qoryai/runner/session"
 	"github.com/qoryai/runner/wall"
 )
@@ -309,8 +310,12 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	rt, err := claude.New()
+	if err != nil {
+		t.Fatal(err)
+	}
 	res, err := session.Run(ctx, session.Spec{
-		Runtime: "claude",
+		Runtime: rt,
 		Command: o.Probe,
 		Args:    []string{modeProbe, "--settings", settings},
 		Env: []string{

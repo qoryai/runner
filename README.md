@@ -62,8 +62,9 @@ wall:
 are flushed:
 
 ```go
+rt, err := catalog.Lookup("claude", "")           // a runtime by its name, see below
 res, err := session.Run(ctx, session.Spec{
-	Runtime:   "claude",                          // names the runtime descriptor
+	Runtime:   rt,
 	Command:   "claude",
 	Args:      []string{"--settings", settings, "-p", "Reply pong."},
 	Policy:    &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: hosts}},
@@ -75,6 +76,14 @@ if err != nil {                                   // the run did not start
 }
 os.Exit(res.ExitCode)                             // the runtime's status; res.Dir is the record
 ```
+
+`Runtime` is the program as the runner needs to know it, a
+[`runtimes.Runtime`](runtimes/runtimes.go): how its launch is prepared, what its records
+mean, how it is asked to leave. `catalog.Lookup(name, dir)` resolves a name: a
+descriptor `<name>.yaml` in `dir`, which is how a machine describes a runtime nothing
+ships for, then the contract's own, Claude Code's today, and for a name with neither a
+bare runtime, run and recorded with no session events. A program that needs code of its
+own implements the interface, and `runtimes/runtimetest` holds it to the same checks.
 
 The spec's `Declared` is the egress the harness declared, which the policy narrows;
 nil means no declaration. `Interactive` runs the session on a pseudo-terminal, else on
@@ -93,7 +102,7 @@ command and whatever engine it reaches:
 
 ```go
 res, err := session.Run(ctx, session.Spec{
-	Runtime: "claude",
+	Runtime: rt,
 	Command: "claude",                            // a path inside the image
 	Args:    []string{"-p", "Reply pong."},
 	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
@@ -252,6 +261,7 @@ wall:
 | `contracts/runner/v1/` | the contract: the documents, a JSON schema each, the runtime descriptors and the fixtures. [Its README](contracts/runner/v1/README.md) is the specification |
 | `contracts/` | the Go package that embeds the contract and validates every fixture |
 | `session/` | the session runner: `session.Run` takes a launch spec, with the policy, the webhook and the wall as values, and returns the exit status; `session.Forward` is the hook forwarder behind it |
+| `runtimes/` | the runtime: `runtimes.Runtime`, the interface between the runner and the program it runs, how a launch is prepared, what the program's records mean, how it is asked to leave. `Described` is a runtime written as a descriptor, `Bare` a program the runner runs and does not read, `runtimes/claude` Claude Code, `runtimes/catalog` a name resolved to one, and `runtimes/runtimetest` the conformance suite every runtime passes |
 | `wall/` | the wall: the adapter interface, the Docker adapter, and `wall.Relay`, the one peer an enclosure reaches. `wall/walltest` is the conformance suite every adapter passes before it ships |
 | `internal/` | what the layers share: `policy`, `proxy`, `event`, `sink`, `webhook`, `descriptor`, `socket`, `chunk`; and `receiver`, the receiving side of the webhook the tests run the sink against, a worked example of the contract's receiving rules |
 | `node/` | the node runner's fleet layer, not built yet: it will register, heartbeat, take a dispatched task, hold the run's credentials and start a session through `session`, behind a wall ([§The node runner](#the-node-runner)) |
