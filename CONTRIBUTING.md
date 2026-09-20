@@ -54,9 +54,11 @@ go vet ./...
 go run github.com/mgechev/revive@v1.16.0 -config revive.toml ./...
 ```
 
-A change to the contract starts with a fixture. A policy, a webhook configuration or an
-event fixture is one document under `contracts/runner/v1/fixtures/` that the schema
-accepts, or one under `fixtures/invalid/` that it refuses. A descriptor fixture is one
+A change to the contract starts with a fixture. A policy, a server document, a
+configuration document or an event fixture is one document under
+`contracts/runner/v1/fixtures/` that the schema accepts, or one under
+`fixtures/invalid/` that it refuses; a signed request is one under `fixtures/signed/`
+with the status a receiver answers. A descriptor fixture is one
 directory under `runtimes/<name>/fixtures/` holding the recorded records and the events
 they map to. The test suite validates every document against the schemas and runs every
 descriptor fixture, so the schemas, the fixtures and the readers cannot drift apart.
@@ -66,7 +68,7 @@ A test is hermetic: `t.TempDir` for the tree, `t.Setenv` for the environment, a 
 listener for anything that speaks HTTP. No test reads the machine's configuration, runs a
 runtime, or reaches the network. The session tests run the test binary itself as the
 runtime and as the hook forwarder, so the whole boundary is exercised without Claude Code
-installed; the proxy is tested against loopback origins and the webhook sink against the
+installed; the proxy is tested against loopback origins and the server sink against the
 receiver. Fixtures hold synthetic data only: no real host names of
 anyone's infrastructure, no real secrets, no recorded session of anyone's work. Name a test
 for the behaviour it pins, not for the function it calls.
@@ -104,7 +106,8 @@ with an id; **session** is the runtime at work inside a run; **runtime** is the 
 that runs the session, such as Claude Code; **policy** is the document that narrows what a
 run may do; **egress** is a connection the session opens to the outside through the
 proxy; **event** is one CloudEvent the runner emits; **sink** is where events go, the file
-or the webhook; **receiver** is what answers a webhook; **descriptor** is the document that
+or the server; **server** is what the runner is a client of, a control plane or a
+receiver; **receiver** is a server that is not a control plane; **descriptor** is the document that
 maps a runtime's output to session events; **record** is one unit of runtime output a
 descriptor reads; **harness** is what the session runs on, composed elsewhere. A runtime is
 never a provider, a tool, an agent or a vendor; the runner never names a hive, a bee or a

@@ -8,14 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/qoryai/runner/internal/event"
-	"github.com/qoryai/runner/internal/receiver"
+	"github.com/qoryai/runner/internal/server"
 	"github.com/qoryai/runner/internal/sink"
-	"github.com/qoryai/runner/internal/webhook"
+	"github.com/qoryai/runner/receiver"
 )
 
 // TestFileSinkWritesBothRecords pins events.jsonl as one line per event and
@@ -74,6 +75,8 @@ type station struct {
 	store *receiver.File
 	fail  atomic.Int32
 	hits  atomic.Int32
+	// runDigest is the run configuration digest the last delivery carried.
+	runDigest atomic.Pointer[string]
 }
 
 func newStation(t *testing.T, stop func(string) bool) *station {
@@ -83,9 +86,16 @@ func newStation(t *testing.T, stop func(string) bool) *station {
 		t.Fatal(err)
 	}
 	s := &station{store: store}
-	h := &receiver.Handler{Secret: "fixture-secret-not-a-real-one", Store: store, Stop: stop}
+	h := &receiver.Handler{
+		Keys:          func(string) ([]string, bool) { return []string{"fixture-secret-not-a-real-one"}, true },
+		Store:         store,
+		Stop:          stop,
+		Configuration: func() ([]byte, string) { return []byte("{}"), "sha256=configuration" },
+	}
 	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.hits.Add(1)
+		d := r.Header.Get(server.HeaderRunConfiguration)
+		s.runDigest.Store(&d)
 		if code := s.fail.Load(); code != 0 {
 			w.WriteHeader(int(code))
 			return
@@ -97,8 +107,16 @@ func newStation(t *testing.T, stop func(string) bool) *station {
 	return s
 }
 
-func client(s *station, events ...string) *webhook.Client {
-	return &webhook.Client{Config: &webhook.Config{URL: s.srv.URL, Secret: "fixture-secret-not-a-real-one", Events: events}, UserAgent: "qory-runner/test"}
+func client(s *station) *server.Client {
+	return &server.Client{Config: &server.Config{Version: 1, URL: s.srv.URL, AccessKey: "ak_f1xt0re000000000", Secret: "fixture-secret-not-a-real-one"}, UserAgent: "qory-runner/test"}
+}
+
+// target is the station's events endpoint with a filter; none means every type.
+func target(s *station, events ...string) sink.Target {
+	if len(events) == 0 {
+		events = []string{"*"}
+	}
+	return sink.Target{URL: s.srv.URL + receiver.DefaultEventsPath, Types: events}
 }
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -112,12 +130,21 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 }
 
-// TestWebhookDeliversBatchesTheReceiverStores pins the sink against the reference
+// TestServerSinkDeliversBatchesTheReceiverStores pins the sink against the reference
 // receiver: events arrive signed, in batches, and are stored once each; a filtered type
-// is never sent; a batch cut by count is one delivery.
-func TestWebhookDeliversBatchesTheReceiverStores(t *testing.T) {
+// is never sent; a batch cut by count is one delivery; the run configuration digest
+// set on the sink goes with every delivery after it, and the answers' digests come
+// back to the caller.
+func TestServerSinkDeliversBatchesTheReceiverStores(t *testing.T) {
 	s := newStation(t, nil)
-	w := sink.NewWebhook(client(s, "ai.qory.run.started", "ai.qory.run.heartbeat"), t.TempDir(), nil)
+	var mu sync.Mutex
+	var answers []server.Digests
+	w := sink.NewServer(client(s), target(s, "ai.qory.run.started", "ai.qory.run.heartbeat"), t.TempDir(), nil, func(d server.Digests) {
+		mu.Lock()
+		answers = append(answers, d)
+		mu.Unlock()
+	})
+	w.SetRunDigest("sha256=run")
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
 	w.Write(e.Make(event.RunLog, map[string]any{"stream": "terminal", "bytes": ""}))
@@ -136,18 +163,26 @@ func TestWebhookDeliversBatchesTheReceiverStores(t *testing.T) {
 	if w.Undelivered() != 0 {
 		t.Errorf("%d undelivered", w.Undelivered())
 	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(answers) == 0 || answers[0].Configuration != "sha256=configuration" || answers[0].RunConfiguration != "" {
+		t.Errorf("the answers' digests %+v", answers)
+	}
+	if d := s.runDigest.Load(); d == nil || *d != "sha256=run" {
+		t.Errorf("the delivery carried the run configuration digest %v", d)
+	}
 }
 
-// TestWebhookRetriesUntilAcceptedAndSpoolsTheRest pins the retry and the spool: a
+// TestServerSinkRetriesUntilAcceptedAndSpoolsTheRest pins the retry and the spool: a
 // receiver that fails then recovers gets the batch once it recovers, under the same
 // delivery id; a receiver that stays down leaves the batch in undelivered/ with the
 // count reported at close.
-func TestWebhookRetriesUntilAcceptedAndSpoolsTheRest(t *testing.T) {
+func TestServerSinkRetriesUntilAcceptedAndSpoolsTheRest(t *testing.T) {
 	s := newStation(t, nil)
 	s.fail.Store(500)
 	var notes []string
 	dir := t.TempDir()
-	w := sink.NewWebhook(client(s), dir, func(l string) { notes = append(notes, l) })
+	w := sink.NewServer(client(s), target(s), dir, func(l string) { notes = append(notes, l) }, nil)
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
 	waitFor(t, func() bool { return s.hits.Load() >= 1 })
@@ -181,7 +216,7 @@ func TestWebhookRetriesUntilAcceptedAndSpoolsTheRest(t *testing.T) {
 // drops what follows without spooling it.
 func TestReceiverStopEndsDeliveries(t *testing.T) {
 	s := newStation(t, func(string) bool { return true })
-	w := sink.NewWebhook(client(s), t.TempDir(), nil)
+	w := sink.NewServer(client(s), target(s), t.TempDir(), nil, nil)
 	e := event.NewEmitter(event.NewRunID(), nil)
 	w.Write(e.Make(event.RunStarted, map[string]any{"runtime": "x"}))
 	waitFor(t, w.Stopped)

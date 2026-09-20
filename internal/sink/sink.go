@@ -1,12 +1,12 @@
 // Package sink is where events go: the file sink that is the record of truth, and the
-// webhook sink that is a copy of it.
+// server sink that is a copy of it.
 //
 // A [Sink] takes the events of one run in sequence order and is closed once at the
 // end. [File] writes events.jsonl and output.log in the run directory and never loses
-// an event. [Webhook] batches, signs and posts to a receiver without ever delaying the
-// session: writes go into a bounded queue, a worker delivers with retries, and what
-// the receiver does not accept by the time the run ends is spooled as batch files and
-// counted. [Writer] prints the same line events.jsonl gets to a stream the caller
+// an event. [Server] batches, signs and posts to the server's events endpoint without
+// ever delaying the session: writes go into a bounded queue, a worker delivers with
+// retries, and what the server does not accept by the time the run ends is spooled as
+// batch files and counted. [Writer] prints the same line events.jsonl gets to a stream the caller
 // owns, standard output say. [Multi] fans one write out to several sinks.
 package sink
 
@@ -99,7 +99,7 @@ func (f *File) Close(context.Context) error {
 }
 
 // Writer writes every event as one JSON line, the line events.jsonl holds, to a stream
-// it does not own: a run with no receiver is followed on standard output this way.
+// it does not own: a run with no server is followed on standard output this way.
 type Writer struct {
 	mu sync.Mutex
 	w  io.Writer

@@ -41,17 +41,19 @@ type Credential struct {
 // other host stays a tunnel it does not read. The session runner calls it once, before
 // anything connects.
 func (p *Proxy) Terminate(ca *CA, creds []Credential, paths map[string][]string) {
-	p.term = &terminator{p: p, ca: ca, creds: creds, paths: paths}
+	p.term.Store(&terminator{p: p, ca: ca, creds: creds, paths: paths})
 }
 
-// Terminated reports the hosts, as configured, the proxy terminates TLS for.
+// Terminated reports the hosts, as configured, the proxy terminates TLS for: under the
+// policy set last, when one was.
 func (p *Proxy) Terminated() []string {
-	if p.term == nil {
+	t := p.term.Load()
+	if t == nil {
 		return nil
 	}
 	var out []string
 	seen := map[string]bool{}
-	for _, c := range p.term.creds {
+	for _, c := range t.creds {
 		for _, h := range c.Hosts {
 			if !seen[h] {
 				seen[h] = true
@@ -59,7 +61,7 @@ func (p *Proxy) Terminated() []string {
 			}
 		}
 	}
-	for h := range p.term.paths {
+	for h := range t.paths {
 		if !seen[h] {
 			seen[h] = true
 			out = append(out, h)
@@ -127,7 +129,7 @@ func (t *terminator) path(host, escaped string) (clean, rule string, allowed, cr
 		}
 		allowed = allowed && ok
 	}
-	if !allowed && t.p.mode == policy.Observe {
+	if !allowed && t.p.rules.Load().mode == policy.Observe {
 		allowed = true
 	}
 	return clean, rule, allowed, credentialed
@@ -154,10 +156,20 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 		},
 		Transport:     t.p.upstream(),
 		FlushInterval: -1,
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if d, ok := settle(r, err); ok {
+				t.p.observe(d)
+				if !d.Allowed {
+					deny(w, d)
+					return
+				}
+			}
 			http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			if d, ok := settle(resp.Request, nil); ok {
+				t.p.observe(d)
+			}
 			if c := t.credential(d.Host); c != nil && resp.StatusCode == http.StatusUnauthorized && c.Rejected != nil && resp.Request.Header.Get(setBy) == c.Name {
 				c.Rejected()
 			}
@@ -178,18 +190,22 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 				req.Credential = c.Name
 			}
 		}
-		t.p.observe(req)
 		if !allowed {
+			req.Outcome = Refused
+			t.p.observe(req)
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusForbidden)
 			if rule == AmbiguousPath {
 				fmt.Fprintf(w, "qory: %s %s%s denied by the wall: the path could be read two ways\n", r.Method, d.Host, clean)
 				return
 			}
-			fmt.Fprintf(w, "qory: %s %s%s denied by policy (mode %s): no path rule of the run's covers it\n", r.Method, d.Host, clean, t.p.mode)
+			fmt.Fprintf(w, "qory: %s %s%s denied by policy (mode %s): no path rule of the run's covers it\n", r.Method, d.Host, clean, req.Mode)
 			return
 		}
-		rp.ServeHTTP(w, r.WithContext(t.p.dialContext(r.Context(), d)))
+		// The request is recorded once its outcome is known: when the response's
+		// headers arrive, or when the transport fails.
+		ctx := context.WithValue(t.p.dialContext(r.Context(), d), pendingKey{}, &pending{d: req})
+		rp.ServeHTTP(w, r.WithContext(ctx))
 	})
 	ln := &once{conn: conn, done: make(chan struct{})}
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: t.p.srv.ReadHeaderTimeout, ConnState: func(_ net.Conn, s http.ConnState) {
@@ -200,6 +216,35 @@ func (t *terminator) serve(ctx context.Context, client net.Conn, d Decision, aut
 	stop := context.AfterFunc(ctx, func() { srv.Close() })
 	defer stop()
 	srv.Serve(ln)
+}
+
+// pendingKey carries a request's decision, waiting for its outcome, in its context.
+type pendingKey struct{}
+
+// pending is a decision recorded once, whichever of the response and the error comes.
+type pending struct {
+	d    Decision
+	once sync.Once
+}
+
+// settle returns the request's decision with its outcome, once: the first call for a
+// request gets it, later ones get false.
+func settle(r *http.Request, err error) (Decision, bool) {
+	p, ok := r.Context().Value(pendingKey{}).(*pending)
+	if !ok {
+		return Decision{}, false
+	}
+	var d Decision
+	done := false
+	p.once.Do(func() {
+		d, done = p.d, true
+		if err != nil {
+			d = failed(d, err)
+		} else {
+			d.Outcome = Connected
+		}
+	})
+	return d, done
 }
 
 // setBy marks, on the way upstream only, a request the proxy set a credential on; the

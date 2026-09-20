@@ -20,9 +20,9 @@ import (
 	"github.com/qoryai/runner/internal/event"
 	"github.com/qoryai/runner/internal/policy"
 	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/internal/server"
 	"github.com/qoryai/runner/internal/sink"
 	"github.com/qoryai/runner/internal/socket"
-	"github.com/qoryai/runner/internal/webhook"
 	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/wall"
 )
@@ -48,12 +48,15 @@ type Spec struct {
 	Stdin       io.Reader
 	Stdout      io.Writer
 	Stderr      io.Writer
-	// Policy is the run's policy; nil means no policy, mode observe.
+	// Policy is the run's policy; nil means no policy, mode observe. With a Server
+	// whose configuration document names a run configuration, the fetched policy is
+	// the policy and this one is ignored: a command refuses the pair before the run.
 	Policy *Policy
-	// Webhook is where the events are posted as well; nil means files only. Local
-	// ignores it.
-	Webhook *Webhook
-	Local   bool
+	// Server is the server the run reports to and takes its run configuration from;
+	// nil means files only, the machine's policy. Local ignores it: the server is not
+	// contacted.
+	Server *Server
+	Local  bool
 	// Events, when not nil, gets every event as one JSON line as well, the line
 	// events.jsonl holds: a run with no receiver is followed on standard output this
 	// way. Local does not silence it.
@@ -79,7 +82,9 @@ type Spec struct {
 	// proxy then terminates TLS for the hosts concerned, with an authority made for the
 	// run whose certificate the enclosure is given to trust.
 	Credentials []Credential
-	// Declared is the egress the harness declared, nil when nothing was.
+	// Declared is the egress the harness declared, nil when nothing was. It is
+	// reported in ai.qory.run.policy_applied as harness_hosts and decides nothing:
+	// the policy alone decides.
 	Declared []string
 	// RunsDir holds the run directories; empty means Dir/.qory/runs.
 	RunsDir string
@@ -133,7 +138,7 @@ type Result struct {
 	State string
 	// TimedOut says the runtime was stopped at the spec's Timeout.
 	TimedOut bool
-	// Undelivered is how many events the webhook did not accept.
+	// Undelivered is how many events the server did not accept.
 	Undelivered int
 }
 
@@ -184,10 +189,11 @@ func CheckLabels(labels map[string]string) error {
 const closeWait = 15 * time.Second
 
 // Run runs one session and returns when the runtime has exited and the sinks are
-// flushed. An error means the run did not start: the policy or the webhook could not
-// be read, the receiver did not accept the ping, the descriptor is unknown, the wall
-// could not be built, or the program could not be started. Once the runtime runs, its exit is the result and not
-// an error. The context ending stops the runtime.
+// flushed. An error means the run did not start: the policy or the server document
+// could not be read, the server's configuration document or run configuration could
+// not be fetched, the server did not accept the ping, the descriptor is unknown, the
+// wall could not be built, or the program could not be started. Once the runtime runs,
+// its exit is the result and not an error. The context ending stops the runtime.
 func Run(ctx context.Context, spec Spec) (*Result, error) {
 	spec = withDefaults(spec)
 	pol := policy.None()
@@ -198,10 +204,16 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			return nil, err
 		}
 	}
-	var hook *webhook.Config
-	if !spec.Local && spec.Webhook != nil {
-		b, _ := json.Marshal(spec.Webhook)
-		if hook, err = webhook.Read("webhook", b); err != nil {
+	// The server, when the run has one: discovered before anything else. The run
+	// configuration it names is fetched after the ping, and is then the policy.
+	var srv *live
+	if !spec.Local && spec.Server != nil {
+		b, _ := json.Marshal(spec.Server)
+		cfg, err := server.Read("server", b)
+		if err != nil {
+			return nil, err
+		}
+		if srv, err = discover(ctx, cfg, spec); err != nil {
 			return nil, err
 		}
 	}
@@ -249,27 +261,6 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	allow := pol.Narrow(spec.Declared)
-	if (len(pol.Policy.Credentials) > 0 || len(pol.Policy.Egress.Paths) > 0) && spec.Wall == nil {
-		files.Close(ctx)
-		return nil, errors.New("the policy selects credentials or has path rules, which need a wall: without one a program that ignores the proxy is bound by neither")
-	}
-	defs := make([]credential.Definition, len(spec.Credentials))
-	for i, c := range spec.Credentials {
-		defs[i] = credential.Definition(c)
-	}
-	held, err := credential.Resolve(ctx, defs, pol.Policy.Credentials, pol.Policy.Egress.Mode, allow, spec.Report)
-	if err != nil {
-		files.Close(ctx)
-		return nil, err
-	}
-	defer held.Close()
-	for _, name := range held.Placeholders {
-		if slices.ContainsFunc(spec.Env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
-			files.Close(ctx)
-			return nil, fmt.Errorf("%s is a placeholder of a credential the runner holds outside the enclosure, and the run passes a value for it inside", name)
-		}
-	}
 	unlock, err := lock(dir)
 	if err != nil {
 		files.Close(ctx)
@@ -280,28 +271,61 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if spec.Events != nil {
 		sinks = append(sinks, sink.NewWriter(spec.Events))
 	}
-	var posts *sink.Webhook
-	if hook != nil {
-		client := &webhook.Client{Config: hook, UserAgent: "qory-runner/" + spec.RunnerVersion}
-		ping := emit.Make(event.Ping, map[string]any{"runner_version": spec.RunnerVersion, "events": filter(hook)})
+	var posts *sink.Server
+	if srv != nil {
+		ping := emit.Make(event.Ping, map[string]any{"runner_version": spec.RunnerVersion, "events": srv.conf.Events.Types, "contract_version": server.Revision})
 		sinks.Write(ping)
 		body, _ := ping.JSON()
 		pingID := event.NewID()
-		if err := client.Ping(ctx, pingID, []byte("["+string(body)+"]")); err != nil {
+		if err := srv.client.Ping(ctx, srv.conf.Events.URL, pingID, []byte("["+string(body)+"]")); err != nil {
 			sinks.Close(ctx)
 			return nil, err
 		}
-		posts = sink.NewWebhook(client, dir, spec.Report)
+		posts = sink.NewServer(srv.client, sink.Target{URL: srv.conf.Events.URL, Types: srv.conf.Events.Types}, dir, spec.Report, srv.digests)
 		posts.Accepted(pingID, ping.Sequence)
 		sinks = append(sinks, posts)
+		srv.posts = posts
+		defer srv.stop()
+		// The run configuration, when the server names one, is the policy: the
+		// machine's and the run's own are not merged with it.
+		if srv.conf.Run != nil {
+			if pol, err = srv.fetch(ctx, srv.conf.Run.URL); err != nil {
+				sinks.Close(ctx)
+				return nil, err
+			}
+			posts.SetRunDigest(pol.RunConfiguration)
+		}
 	}
-	// write numbers and writes under one lock, so the order in the sinks is the order of
-	// the sequence whichever goroutine emits: the proxy, the socket, the heartbeat.
+	allow := pol.Policy.Egress.Allow
+	if (len(pol.Policy.Credentials) > 0 || len(pol.Policy.Egress.Paths) > 0) && spec.Wall == nil {
+		sinks.Close(ctx)
+		return nil, errors.New("the policy selects credentials or has path rules, which need a wall: without one a program that ignores the proxy is bound by neither")
+	}
+	defs := make([]credential.Definition, len(spec.Credentials))
+	for i, c := range spec.Credentials {
+		defs[i] = credential.Definition(c)
+	}
+	held, err := credential.Resolve(ctx, defs, pol.Policy.Credentials, pol.Policy.Egress.Mode, allow, spec.Report)
+	if err != nil {
+		sinks.Close(ctx)
+		return nil, err
+	}
+	defer held.Close()
+	for _, name := range held.Placeholders {
+		if slices.ContainsFunc(spec.Env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
+			sinks.Close(ctx)
+			return nil, fmt.Errorf("%s is a placeholder of a credential the runner holds outside the enclosure, and the run passes a value for it inside", name)
+		}
+	}
+	// record numbers and writes under one lock, so the order in the sinks is the order
+	// of the sequence whichever goroutine emits: the proxy, the socket, the heartbeat,
+	// a reload. write takes the lock; record is for a caller that holds it.
 	var mu sync.Mutex
+	record := func(typ string, data any) { sinks.Write(emit.Make(typ, data)) }
 	write := func(typ string, data any) {
 		mu.Lock()
 		defer mu.Unlock()
-		sinks.Write(emit.Make(typ, data))
+		record(typ, data)
 	}
 
 	// The wall comes before the proxy, because it says where the proxy must listen, and
@@ -322,20 +346,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		bind = enclosure.ProxyAddr()
 	}
 
-	px, err := proxy.Listen(bind, pol.Policy.Egress.Mode, allow, func(d proxy.Decision) {
-		decision := "denied"
-		if d.Allowed {
-			decision = "allowed"
-		}
-		egress := map[string]any{"host": d.Host, "port": d.Port, "method": d.Method, "decision": decision, "mode": string(pol.Policy.Egress.Mode), "rule": d.Rule}
-		if d.Path != "" {
-			egress["request_method"], egress["path"], egress["path_rule"] = d.RequestMethod, d.Path, d.PathRule
-		}
-		if d.Credential != "" {
-			egress["credential"] = d.Credential
-		}
-		write(event.RunEgress, egress)
-	})
+	px, err := proxy.Listen(bind, pol.Policy.Egress.Mode, allow, func(d proxy.Decision) { write(event.RunEgress, egress(d)) })
 	if err != nil {
 		sinks.Close(ctx)
 		return nil, err
@@ -346,8 +357,11 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// addresses are not its to reach.
 		px.Guard(pol.Policy.Egress.Allow)
 	}
+	// The run's authority: for the hosts a credential is for and the hosts with path
+	// rules, and behind a wall with a fetched run configuration always, since a reload
+	// may bring path rules and the enclosure trusts only what it was given at start.
 	var authority []byte
-	if len(held.Uses) > 0 || len(pol.Policy.Egress.Paths) > 0 {
+	if len(held.Uses) > 0 || len(pol.Policy.Egress.Paths) > 0 || (spec.Wall != nil && pol.Source == "fetched") {
 		ca, err := proxy.NewCA(runID)
 		if err != nil {
 			sinks.Close(ctx)
@@ -430,30 +444,60 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		started["labels"] = spec.Labels
 	}
 	write(event.RunStarted, started)
-	applied := map[string]any{"mode": string(pol.Policy.Egress.Mode), "allow": allow, "source": pol.Source}
-	if pol.Source == "config" {
-		applied["digest"] = pol.Digest
-	}
-	if spec.Declared != nil {
-		applied["declared"] = spec.Declared
-	}
-	if len(pol.Policy.Egress.Paths) > 0 {
-		applied["paths"] = pol.Policy.Egress.Paths
-	}
-	if len(held.Uses) > 0 {
-		uses := make([]map[string]any, len(held.Uses))
-		for i, u := range held.Uses {
-			uses[i] = map[string]any{"name": u.Name, "hosts": u.Hosts, "scheme": u.Scheme}
-			if u.Paths != nil {
-				uses[i]["paths"] = u.Paths
-			}
+	// applied is the policy_applied event of a policy: the one pinned at start, and
+	// each one a reload puts in its place.
+	applied := func(pol *policy.Loaded) map[string]any {
+		allow := pol.Policy.Egress.Allow
+		if allow == nil {
+			allow = []string{}
 		}
-		applied["credentials"] = uses
+		a := map[string]any{"mode": string(pol.Policy.Egress.Mode), "allow": allow, "source": pol.Source}
+		if pol.Source != "none" {
+			a["digest"] = pol.Digest
+		}
+		if pol.Source == "fetched" {
+			a["url"], a["run_configuration"] = pol.URL, pol.RunConfiguration
+		}
+		if spec.Declared != nil {
+			a["harness_hosts"] = spec.Declared
+		}
+		if len(pol.Policy.Egress.Paths) > 0 {
+			a["paths"] = pol.Policy.Egress.Paths
+		}
+		if len(held.Uses) > 0 {
+			uses := make([]map[string]any, len(held.Uses))
+			for i, u := range held.Uses {
+				uses[i] = map[string]any{"name": u.Name, "hosts": u.Hosts, "scheme": u.Scheme}
+				if u.Paths != nil {
+					uses[i]["paths"] = u.Paths
+				}
+			}
+			a["credentials"] = uses
+		}
+		if hosts := px.Terminated(); len(hosts) > 0 {
+			a["terminated"] = hosts
+		}
+		return a
 	}
-	if hosts := px.Terminated(); len(hosts) > 0 {
-		applied["terminated"] = hosts
+	write(event.PolicyApplied, applied(pol))
+	if srv != nil {
+		// A reload takes effect under the record's lock: the new policy decides the
+		// proxy's next connection, its event is written, and the tunnels it closed are
+		// recorded after it, before any other event.
+		srv.start(func(next *policy.Loaded) {
+			mu.Lock()
+			defer mu.Unlock()
+			refused, pathsApplied := px.SetPolicy(next.Policy.Egress.Mode, next.Policy.Egress.Allow, next.Policy.Egress.Paths)
+			if !pathsApplied {
+				spec.Report("the run configuration has path rules, which need a wall; its hosts are reached on every path")
+			}
+			posts.SetRunDigest(next.RunConfiguration)
+			record(event.PolicyApplied, applied(next))
+			for _, d := range refused {
+				record(event.RunEgress, egress(d))
+			}
+		})
 	}
-	write(event.PolicyApplied, applied)
 
 	logs := func(stream string) func([]byte) {
 		return func(b []byte) { write(event.RunLog, map[string]any{"stream": stream, "bytes": encode(b)}) }
@@ -481,6 +525,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	cancelLimit()
 	stop()
 	closeSocket()
+	if srv != nil {
+		// A reload still in flight ends here: nothing of it goes after run.exited.
+		srv.stop()
+	}
 	if err != nil {
 		sinks.Close(ctx)
 		return nil, err
@@ -597,11 +645,20 @@ func heartbeat(ctx context.Context, interval time.Duration, start time.Time, wri
 	return func() { close(done); <-stopped }
 }
 
-func filter(c *webhook.Config) []string {
-	if len(c.Events) == 0 {
-		return []string{"*"}
+// egress is the egress event of one decision.
+func egress(d proxy.Decision) map[string]any {
+	decision := "denied"
+	if d.Allowed {
+		decision = "allowed"
 	}
-	return c.Events
+	data := map[string]any{"host": d.Host, "port": d.Port, "method": d.Method, "decision": decision, "mode": string(d.Mode), "rule": d.Rule, "outcome": d.Outcome}
+	if d.Path != "" {
+		data["request_method"], data["path"], data["path_rule"] = d.RequestMethod, d.Path, d.PathRule
+	}
+	if d.Credential != "" {
+		data["credential"] = d.Credential
+	}
+	return data
 }
 
 func hostname() string {

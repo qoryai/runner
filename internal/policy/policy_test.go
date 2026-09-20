@@ -95,25 +95,21 @@ func TestMatchFollowsTheGrammar(t *testing.T) {
 	}
 }
 
-// TestNarrowKeepsOnlyWhatThePolicyCovers pins the intersection: declared entries the
-// policy covers survive in declared order, the rest are dropped, and with no
-// declaration the policy's own list is the effective one.
-func TestNarrowKeepsOnlyWhatThePolicyCovers(t *testing.T) {
-	l := &policy.Loaded{Policy: policy.Policy{Egress: policy.Egress{Mode: policy.Enforce, Allow: []string{"api.anthropic.com", "*.github.com"}}}}
-	got := l.Narrow([]string{"registry.npmjs.org", "api.github.com", "*.api.github.com", "github.com", "api.anthropic.com", "api.github.com", "*.github.com"})
-	want := []string{"api.github.com", "*.api.github.com", "api.anthropic.com", "*.github.com"}
-	if len(got) != len(want) {
-		t.Fatalf("Narrow = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("Narrow = %v, want %v", got, want)
+// TestCoversFollowsTheGrammar pins what stands above what: a name under the same name
+// or a suffix above it, a pattern under the same pattern or a suffix above it, and a
+// suffix never covers its own apex.
+func TestCoversFollowsTheGrammar(t *testing.T) {
+	for _, c := range []struct {
+		entry, other string
+		want         bool
+	}{
+		{"api.github.com", "api.github.com", true}, {"api.github.com", "API.github.com", true},
+		{"*.github.com", "api.github.com", true}, {"*.github.com", "*.api.github.com", true},
+		{"*.github.com", "github.com", false}, {"api.github.com", "*.github.com", false},
+		{"*.github.com", "*.github.com", true}, {"github.com", "api.github.com", false},
+	} {
+		if got := policy.Covers(c.entry, c.other); got != c.want {
+			t.Errorf("Covers(%q, %q) = %v", c.entry, c.other, got)
 		}
-	}
-	if got := l.Narrow(nil); len(got) != 2 {
-		t.Errorf("no declaration: %v", got)
-	}
-	if got := l.Narrow([]string{}); len(got) != 0 {
-		t.Errorf("empty declaration reaches nothing, got %v", got)
 	}
 }

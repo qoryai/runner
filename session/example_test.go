@@ -10,7 +10,7 @@ import (
 )
 
 // Example runs one headless Claude Code turn inside the boundary, with a policy and a
-// webhook the caller read from its own configuration, and exits with the runtime's
+// server the caller read from its own configuration, and exits with the runtime's
 // status. It compiles with the module's tests and is not run, since it starts a real
 // program.
 func Example() {
@@ -26,7 +26,7 @@ func Example() {
 		Command: "claude",
 		Args:    []string{"--settings", "/path/to/settings.json", "-p", "Reply with the single word pong."},
 		Policy:  &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: []string{"api.anthropic.com"}}},
-		Webhook: &session.Webhook{Version: 1, URL: "https://example.com/qory/events", Secret: os.Getenv("QORY_WEBHOOK_SECRET")},
+		Server:  &session.Server{Version: 1, URL: "https://qory.example", AccessKey: "ak_f1xt0re000000000", Secret: os.Getenv("QORY_SERVER_SECRET")},
 		// The hook command; it calls session.Forward, see Example_forward.
 		Forwarder: []string{exe, "forward"},
 	})

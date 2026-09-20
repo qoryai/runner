@@ -68,10 +68,14 @@ func (p *Policy) Under(ceiling *Policy) *Policy {
 		c.Credentials = p.Credentials
 		return &c
 	}
-	top := &policy.Loaded{Policy: policy.Policy{Egress: policy.Egress{Allow: ceiling.Egress.Allow}}}
-	allow := p.Egress.Allow
-	if allow == nil {
-		allow = []string{}
+	allow := []string{}
+	for _, entry := range p.Egress.Allow {
+		for _, above := range ceiling.Egress.Allow {
+			if policy.Covers(above, entry) {
+				allow = append(allow, entry)
+				break
+			}
+		}
 	}
 	paths := map[string][]string{}
 	for host, rules := range ceiling.Egress.Paths {
@@ -97,21 +101,25 @@ func (p *Policy) Under(ceiling *Policy) *Policy {
 	if len(paths) == 0 {
 		paths = nil
 	}
-	return &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: top.Narrow(allow), Paths: paths}, Credentials: p.Credentials}
+	return &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: allow, Paths: paths}, Credentials: p.Credentials}
 }
 
-// Webhook is the webhook configuration, contracts/runner/v1/webhook.schema.json, as
-// the caller hands it to the runner: where to post every event as well as writing it,
-// signed with the secret. The runner validates it before the ping.
-type Webhook struct {
+// Server is the server document, contracts/runner/v1/server.schema.json, as the
+// caller hands it to the runner: the server whose configuration document says where
+// events go and where the run configuration is, the key the runner reports as, and the
+// secret that signs every request. The runner validates it, fetches the configuration
+// document, and posts a ping the server must accept, before anything starts.
+type Server struct {
 	// Version is the document version, 1.
 	Version int `json:"version"`
-	// URL is https, or http to a loopback address.
+	// URL is the server's origin: https, or http to a loopback address; no path.
 	URL string `json:"url"`
-	// Secret signs every delivery; at least 16 characters, shared with the receiver.
+	// AccessKey names the runner to the server: "ak_" and 16 lowercase Crockford
+	// base32 characters.
+	AccessKey string `json:"access_key"`
+	// Secret signs every request; at least 16 characters, shared with the server and
+	// never sent.
 	Secret string `json:"secret"`
-	// Events are the types to post, full names or "*"; nil is every type.
-	Events []string `json:"events,omitempty"`
 }
 
 // Credential is one credential as the machine defines it, [Spec.Credentials]: a token
