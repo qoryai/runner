@@ -293,6 +293,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 				sinks.Close(ctx)
 				return nil, err
 			}
+			srv.holds(pol.RunConfiguration)
 			posts.SetRunDigest(pol.RunConfiguration)
 		}
 	}
@@ -305,18 +306,18 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	for i, c := range spec.Credentials {
 		defs[i] = credential.Definition(c)
 	}
-	held, err := credential.Resolve(ctx, defs, pol.Policy.Credentials, pol.Policy.Egress.Mode, allow, spec.Report)
+	held, err := hold(ctx, spec, defs, pol)
 	if err != nil {
 		sinks.Close(ctx)
 		return nil, err
 	}
-	defer held.Close()
-	for _, name := range held.Placeholders {
-		if slices.ContainsFunc(spec.Env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
-			sinks.Close(ctx)
-			return nil, fmt.Errorf("%s is a placeholder of a credential the runner holds outside the enclosure, and the run passes a value for it inside", name)
+	// held is replaced by a reload, which is over before this runs.
+	defer func() {
+		if srv != nil {
+			srv.stop()
 		}
-	}
+		held.Close()
+	}()
 	// record numbers and writes under one lock, so the order in the sinks is the order
 	// of the sequence whichever goroutine emits: the proxy, the socket, the heartbeat,
 	// a reload. write takes the lock; record is for a caller that holds it.
@@ -358,20 +359,17 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		px.Guard(pol.Policy.Egress.Allow)
 	}
 	// The run's authority: for the hosts a credential is for and the hosts with path
-	// rules, and behind a wall with a fetched run configuration always, since a reload
-	// may bring path rules and the enclosure trusts only what it was given at start.
+	// rules, and behind a wall with a server always, since a reload may bring a run
+	// configuration with path rules or credentials, and the enclosure trusts only what
+	// it was given at start.
 	var authority []byte
-	if len(held.Uses) > 0 || len(pol.Policy.Egress.Paths) > 0 || (spec.Wall != nil && pol.Source == "fetched") {
+	if len(held.Uses) > 0 || len(pol.Policy.Egress.Paths) > 0 || (spec.Wall != nil && srv != nil) {
 		ca, err := proxy.NewCA(runID)
 		if err != nil {
 			sinks.Close(ctx)
 			return nil, err
 		}
-		uses := make([]proxy.Credential, len(held.Uses))
-		for i, u := range held.Uses {
-			uses[i] = proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths, Token: u.Token, Rejected: u.Rejected}
-		}
-		px.Terminate(ca, uses, pol.Policy.Egress.Paths)
+		px.Terminate(ca, proxyUses(held), pol.Policy.Egress.Paths)
 		authority = ca.PEM()
 	}
 	// Behind a wall the proxy listens where other containers of the engine, or other
@@ -446,7 +444,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	write(event.RunStarted, started)
 	// applied is the policy_applied event of a policy: the one pinned at start, and
 	// each one a reload puts in its place.
-	applied := func(pol *policy.Loaded) map[string]any {
+	applied := func(pol *policy.Loaded, held *credential.Held) map[string]any {
 		allow := pol.Policy.Egress.Allow
 		if allow == nil {
 			allow = []string{}
@@ -479,23 +477,44 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 		return a
 	}
-	write(event.PolicyApplied, applied(pol))
+	write(event.PolicyApplied, applied(pol, held))
 	if srv != nil {
-		// A reload takes effect under the record's lock: the new policy decides the
-		// proxy's next connection, its event is written, and the tunnels it closed are
-		// recorded after it, before any other event.
-		srv.start(func(next *policy.Loaded) {
-			mu.Lock()
-			defer mu.Unlock()
-			refused, pathsApplied := px.SetPolicy(next.Policy.Egress.Mode, next.Policy.Egress.Allow, next.Policy.Egress.Paths)
-			if !pathsApplied {
-				spec.Report("the run configuration has path rules, which need a wall; its hosts are reached on every path")
+		// A reload is as strict as a start. What a start refuses, a policy that selects
+		// credentials without a wall, a credential that does not resolve, fails the
+		// reload and leaves the policy in force. Path rules the proxy cannot hold,
+		// for want of the run's authority, take their hosts out of the allow list
+		// instead, so they are not reached on every path. Then it takes effect under the
+		// record's lock: the policy and its credentials go to the proxy in one step, the
+		// event is written, and the tunnels it closed are recorded after it, before any
+		// other event.
+		srv.start(func(next *policy.Loaded) error {
+			in := *next
+			if !px.Terminates() {
+				if len(in.Policy.Credentials) > 0 {
+					return errors.New("the run configuration selects credentials, which need a wall")
+				}
+				if len(in.Policy.Egress.Paths) > 0 {
+					in.Policy.Egress.Allow = withoutHeld(in.Policy.Egress.Allow, in.Policy.Egress.Paths)
+					in.Policy.Egress.Paths = nil
+					spec.Report("the run configuration has path rules, which need a wall; the hosts they hold are taken out of the allow list")
+				}
 			}
-			posts.SetRunDigest(next.RunConfiguration)
-			record(event.PolicyApplied, applied(next))
+			fresh, err := hold(ctx, spec, defs, &in)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			refused := px.SetPolicy(in.Policy.Egress.Mode, in.Policy.Egress.Allow, in.Policy.Egress.Paths, proxyUses(fresh))
+			old := held
+			held = fresh
+			posts.SetRunDigest(in.RunConfiguration)
+			record(event.PolicyApplied, applied(&in, fresh))
 			for _, d := range refused {
 				record(event.RunEgress, egress(d))
 			}
+			mu.Unlock()
+			old.Close()
+			return nil
 		})
 	}
 
@@ -643,6 +662,53 @@ func heartbeat(ctx context.Context, interval time.Duration, start time.Time, wri
 		}
 	}()
 	return func() { close(done); <-stopped }
+}
+
+// hold resolves the credentials a policy selects, as the machine defines them, and
+// refuses a placeholder the run passes a value for: at the start and at every reload
+// alike.
+func hold(ctx context.Context, spec Spec, defs []credential.Definition, pol *policy.Loaded) (*credential.Held, error) {
+	held, err := credential.Resolve(ctx, defs, pol.Policy.Credentials, pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, spec.Report)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range held.Placeholders {
+		if slices.ContainsFunc(spec.Env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
+			held.Close()
+			return nil, fmt.Errorf("%s is a placeholder of a credential the runner holds outside the enclosure, and the run passes a value for it inside", name)
+		}
+	}
+	return held, nil
+}
+
+// proxyUses are the held credentials as the proxy sets them.
+func proxyUses(held *credential.Held) []proxy.Credential {
+	uses := make([]proxy.Credential, len(held.Uses))
+	for i, u := range held.Uses {
+		uses[i] = proxy.Credential{Name: u.Name, Hosts: u.Hosts, Scheme: u.Scheme, Username: u.Username, Header: u.Header, Paths: u.Paths, Token: u.Token, Rejected: u.Rejected}
+	}
+	return uses
+}
+
+// withoutHeld is an allow list without the hosts path rules hold, for a proxy that
+// cannot hold them: an entry goes when it is a held host, stands under one or stands
+// above one, since what stays would be reached on every path. Under enforce the hosts
+// are then denied and recorded like any other.
+func withoutHeld(allow []string, paths map[string][]string) []string {
+	out := []string{}
+	for _, entry := range allow {
+		keep := true
+		for host := range paths {
+			if policy.Covers(host, entry) || policy.Covers(entry, host) {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // egress is the egress event of one decision.

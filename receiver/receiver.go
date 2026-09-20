@@ -30,8 +30,10 @@ import (
 	"github.com/qoryai/runner/internal/server"
 )
 
-// MaxBody is the largest delivery accepted.
-const MaxBody = 16 << 20
+// MaxBody is the largest delivery accepted, and the most the handler reads of a body
+// before it has verified anything: 2 MiB, twice the mebibyte the contract cuts a batch
+// at, so what an unauthenticated sender can make the receiver hold is small.
+const MaxBody = 2 << 20
 
 // The default paths of the events endpoint and the run configuration.
 const (
@@ -239,7 +241,7 @@ func (h *Handler) verifyGET(r *http.Request) bool {
 func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBody+1))
 	if err != nil || len(body) > MaxBody {
-		http.Error(w, "body unreadable or over 16 MiB", http.StatusRequestEntityTooLarge)
+		http.Error(w, "body unreadable or over 2 MiB", http.StatusRequestEntityTooLarge)
 		return
 	}
 	if !h.verifyPOST(r, body) {

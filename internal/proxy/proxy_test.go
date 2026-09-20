@@ -187,9 +187,9 @@ func TestSetPolicyDecidesNewConnectionsAndClosesDeniedTunnels(t *testing.T) {
 	stays, goes := open("127.0.0.1"), open("localhost")
 	defer stays.Close()
 	defer goes.Close()
-	refused, applied := p.SetPolicy(policy.Enforce, []string{"127.0.0.1"}, nil)
-	if !applied || len(refused) != 1 || refused[0].Host != "localhost" || refused[0].Allowed || refused[0].Outcome != proxy.Refused || refused[0].Mode != policy.Enforce {
-		t.Fatalf("SetPolicy returned %+v, applied %v", refused, applied)
+	refused := p.SetPolicy(policy.Enforce, []string{"127.0.0.1"}, nil, nil)
+	if p.Terminates() || len(refused) != 1 || refused[0].Host != "localhost" || refused[0].Allowed || refused[0].Outcome != proxy.Refused || refused[0].Mode != policy.Enforce {
+		t.Fatalf("SetPolicy returned %+v", refused)
 	}
 	if _, err := goes.Read(make([]byte, 1)); err == nil {
 		t.Error("the tunnel to the denied host is still open")
@@ -477,5 +477,63 @@ func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 		if d.Path == "/other-org/repo" && (d.Allowed || d.Outcome != proxy.Refused) {
 			t.Errorf("the denied path was recorded as %+v", d)
 		}
+	}
+}
+
+// TestSetPolicySwapsTheCredentialsWithThePolicy pins a reload's credentials: the ones
+// set with the new policy are on the next request, a terminated connection that
+// carried the old one is closed and not kept alive under it, and a host that lost its
+// credential gets none.
+func TestSetPolicySwapsTheCredentialsWithThePolicy(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("Authorization"))
+		mu.Unlock()
+	}))
+	defer origin.Close()
+	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
+	p, err := proxy.Listen("", policy.Enforce, []string{host}, func(proxy.Decision) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	ca, err := proxy.NewCA("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(origin.Certificate())
+	p.TrustUpstream(roots)
+	cred := func(name, token string) []proxy.Credential {
+		return []proxy.Credential{{Name: name, Hosts: []string{host}, Scheme: "bearer", Token: func() string { return token }}}
+	}
+	p.Terminate(ca, cred("first", "token-one"), nil)
+	if !p.Terminates() {
+		t.Fatal("Terminates is false after Terminate")
+	}
+	trusted := x509.NewCertPool()
+	trusted.AppendCertsFromPEM(ca.PEM())
+	proxyURL, _ := url.Parse(p.URL())
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: &tls.Config{RootCAs: trusted}}}
+	get := func() {
+		resp, err := client.Get("https://" + net.JoinHostPort(host, port) + "/x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	get()
+	p.SetPolicy(policy.Enforce, []string{host}, nil, cred("second", "token-two"))
+	get()
+	// A path rule keeps the host terminated once no credential is for it.
+	p.SetPolicy(policy.Enforce, []string{host}, map[string][]string{host: {"/*"}}, nil)
+	get()
+	mu.Lock()
+	defer mu.Unlock()
+	if fmt.Sprint(seen) != "[Bearer token-one Bearer token-two ]" {
+		t.Errorf("the origin saw %q", seen)
 	}
 }

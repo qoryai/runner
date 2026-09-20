@@ -116,6 +116,9 @@ type Proxy struct {
 type tunnel struct {
 	d     Decision
 	conns []net.Conn
+	// terminated says the proxy ends the connection's TLS itself and sets the
+	// credential for its host on the requests inside it.
+	terminated bool
 }
 
 // GuardRule is the rule a guarded proxy's denial names in its decision: not an allow
@@ -235,27 +238,38 @@ func opened(names []string) []string {
 	return out
 }
 
+// Terminates reports whether [Proxy.Terminate] was called: whether the proxy has the
+// run's authority, without which it holds no host to paths and sets no credential.
+func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
+
 // SetPolicy replaces the policy the proxy decides by: the mode and the allow list for
 // every decision from now on, the guard's names with them when the proxy is guarded,
-// and the path rules for the hosts it terminates, when [Proxy.Terminate] was called;
-// without a terminator the paths are not applied, which the result says. A tunnel open
-// to a host the new policy denies is closed, and the decisions that denied them are
+// and, in one step with them, the path rules and the credentials of the hosts it
+// terminates. Without a terminator, [Proxy.Terminates], paths and credentials are not
+// applied, and the caller must not pass a policy that relies on them. A tunnel open to
+// a host the new policy denies is closed, and the decisions that denied them are
 // returned, refused, for the caller to record: the caller writes the policy's own event
-// first and these after it.
-func (p *Proxy) SetPolicy(mode policy.Mode, allow []string, paths map[string][]string) (refused []Decision, pathsApplied bool) {
+// first and these after it. A terminated connection to a host whose credential is
+// another one now, or none, is closed as well and not recorded, since nothing was
+// denied: the next connection carries what the new policy selects.
+func (p *Proxy) SetPolicy(mode policy.Mode, allow []string, paths map[string][]string, creds []Credential) (refused []Decision) {
 	r := &rules{mode: mode, allow: allow}
 	if p.guarded.Load() {
 		r.opened = opened(allow)
 	}
-	p.rules.Store(r)
-	if t := p.term.Load(); t != nil {
-		nt := *t
-		nt.paths = paths
-		p.term.Store(&nt)
-		pathsApplied = true
-	} else {
-		pathsApplied = len(paths) == 0
+	before := p.term.Load()
+	var after *terminator
+	if before != nil {
+		nt := *before
+		nt.paths, nt.creds = paths, creds
+		after = &nt
 	}
+	// The terminator first: a connection decided under the new rules finds the new
+	// credentials, never the old ones.
+	if after != nil {
+		p.term.Store(after)
+	}
+	p.rules.Store(r)
 	p.tmu.Lock()
 	open := make([]*tunnel, 0, len(p.tunnels))
 	for t := range p.tunnels {
@@ -264,20 +278,23 @@ func (p *Proxy) SetPolicy(mode policy.Mode, allow []string, paths map[string][]s
 	p.tmu.Unlock()
 	for _, t := range open {
 		d := p.decide(t.d.Method, t.d.Host, t.d.Port)
-		if d.Allowed {
+		switch {
+		case !d.Allowed:
+			refused = append(refused, d)
+		case t.terminated && before.credentialName(t.d.Host) != after.credentialName(t.d.Host):
+		default:
 			continue
 		}
 		for _, c := range t.conns {
 			c.Close()
 		}
-		refused = append(refused, d)
 	}
-	return refused, pathsApplied
+	return refused
 }
 
 // track remembers an open connection until untrack.
-func (p *Proxy) track(d Decision, conns ...net.Conn) *tunnel {
-	t := &tunnel{d: d, conns: conns}
+func (p *Proxy) track(d Decision, terminated bool, conns ...net.Conn) *tunnel {
+	t := &tunnel{d: d, conns: conns, terminated: terminated}
 	p.tmu.Lock()
 	p.tunnels[t] = struct{}{}
 	p.tmu.Unlock()
@@ -460,7 +477,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 			client.Close()
 			return
 		}
-		t := p.track(d, client)
+		t := p.track(d, true, client)
 		defer p.untrack(t)
 		p.term.Load().serve(context.WithoutCancel(r.Context()), client, d, net.JoinHostPort(host, portText))
 		return
@@ -497,7 +514,7 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		upstream.Close()
 		return
 	}
-	t := p.track(d, client, upstream)
+	t := p.track(d, false, client, upstream)
 	defer p.untrack(t)
 	relay(client, upstream, buf.Reader.Buffered(), buf.Reader)
 }

@@ -84,6 +84,21 @@ func (e *Error) Error() string { return "server " + e.Name + ": " + e.Err.Error(
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
 
+// DocumentError is a document the server answered with 200 and the runner refuses:
+// the schema does, or its digest header is missing or misshapen. It tells a caller
+// that asking again gets the same, which a transport failure or another status does
+// not.
+type DocumentError struct {
+	// What is the document's kind and URL the URL it was fetched from.
+	What, URL string
+	Err       error
+}
+
+func (e *DocumentError) Error() string { return e.What + " " + e.URL + ": " + e.Err.Error() }
+
+// Unwrap returns the underlying error.
+func (e *DocumentError) Unwrap() error { return e.Err }
+
 // Read reads a server document from bytes, YAML or JSON by name's extension, JSON
 // when it has none. A refused document is a [*Error] naming name.
 func Read(name string, b []byte) (*Config, error) {
@@ -222,15 +237,24 @@ type Client struct {
 	Config *Config
 	// UserAgent is sent as User-Agent: qory-runner/<version>.
 	UserAgent string
-	// HTTP is the client used; nil means one with Timeout.
+	// HTTP is the client used; nil means one with Timeout. Its redirect policy is
+	// not used: the client follows no redirect.
 	HTTP *http.Client
 }
 
+// http is the client every request goes through: the caller's, copied, or one with
+// Timeout, and in either case one that follows no redirect. Go copies a request's
+// headers to wherever a redirect points, so a followed 3xx would hand the access key,
+// the signature and the timestamp to another host and take the answer from it. A 3xx
+// is a status like any other.
 func (c *Client) http() *http.Client {
+	hc := &http.Client{Timeout: Timeout}
 	if c.HTTP != nil {
-		return c.HTTP
+		cp := *c.HTTP
+		hc = &cp
 	}
-	return &http.Client{Timeout: Timeout}
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return hc
 }
 
 // headers sets what every request carries.
@@ -270,14 +294,14 @@ func (c *Client) fetch(ctx context.Context, what, u, digestHeader, schemaName st
 		return "", fmt.Errorf("%s %s: status %d", what, u, resp.StatusCode)
 	}
 	if len(body) > MaxDocument {
-		return "", fmt.Errorf("%s %s: the document is over %d bytes", what, u, MaxDocument)
+		return "", &DocumentError{what, u, fmt.Errorf("the document is over %d bytes", MaxDocument)}
 	}
 	digest := resp.Header.Get(digestHeader)
 	if digest == "" {
-		return "", fmt.Errorf("%s %s: the answer carries no %s header", what, u, digestHeader)
+		return "", &DocumentError{what, u, fmt.Errorf("the answer carries no %s header", digestHeader)}
 	}
 	if err := decode(what+".json", schemaName, body, out); err != nil {
-		return "", fmt.Errorf("%s %s: %w", what, u, err)
+		return "", &DocumentError{what, u, err}
 	}
 	return digest, nil
 }
@@ -319,7 +343,7 @@ func (c *Client) RunConfiguration(ctx context.Context, runURL, forge, repository
 	// The digest is recorded in the run's events, whose schema holds it to this shape;
 	// it is not recomputed.
 	if !digestShape.MatchString(digest) {
-		return nil, "", fmt.Errorf("run configuration %s: the %s header is not sha256= and 64 hex digits", u, HeaderRunConfiguration)
+		return nil, "", &DocumentError{"run configuration", u.String(), fmt.Errorf("the %s header is not sha256= and 64 hex digits", HeaderRunConfiguration)}
 	}
 	return &rc, digest, nil
 }

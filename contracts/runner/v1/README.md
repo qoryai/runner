@@ -519,6 +519,7 @@ wrong shape, a key the server does not know or has revoked, a timestamp that is 
 integer, a stale timestamp, a signature that does not match. The body never says which.
 A header sent twice is refused. The server verifies with a constant-time comparison,
 looks the key up only after its shape is checked, and logs nothing about the headers.
+A redirect is not followed: a 3xx is a status like any other.
 
 **The configuration document.** `configuration.schema.json`. A signed
 `GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery. The

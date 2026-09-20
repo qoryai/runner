@@ -87,6 +87,17 @@ func (t *terminator) credential(host string) *Credential {
 	return nil
 }
 
+// credentialName names the credential that is for the host, empty when none is.
+func (t *terminator) credentialName(host string) string {
+	if t == nil {
+		return ""
+	}
+	if c := t.credential(host); c != nil {
+		return c.Name
+	}
+	return ""
+}
+
 // rules are the policy's path rules for the host, and whether it has any.
 func (t *terminator) rules(host string) ([]string, bool) {
 	for pattern, rules := range t.paths {

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -278,5 +279,42 @@ func TestDeliveryCarriesTheHeadersAndReadsTheDigests(t *testing.T) {
 	v.srv.Close()
 	if err := c.Ping(context.Background(), events, "d4", []byte("[]")); err == nil {
 		t.Error("ping on a closed server succeeded")
+	}
+}
+
+// TestARedirectIsNotFollowed pins that a 3xx is a status like any other: the host it
+// points at sees no request, so no key, signature or timestamp reaches it, whether the
+// client is the package's own or the caller's; discovery is then no run, and a
+// delivery is not accepted.
+func TestARedirectIsNotFollowed(t *testing.T) {
+	var elsewhere atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere.Add(1)
+		w.Header().Set(server.HeaderConfiguration, "sha256=c0")
+		io.WriteString(w, `{"version":1,"events":{"url":"https://elsewhere.example/v1/events","types":["*"]}}`)
+	}))
+	defer other.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.RequestURI(), http.StatusFound)
+	}))
+	defer origin.Close()
+	for name, hc := range map[string]*http.Client{"the package's client": nil, "the caller's client": {}} {
+		c := &server.Client{Config: &server.Config{Version: 1, URL: origin.URL, AccessKey: key, Secret: secret}, UserAgent: "qory-runner/test", HTTP: hc}
+		if _, _, err := c.Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "status 302") {
+			t.Errorf("%s: discovery through a redirect: %v", name, err)
+		}
+		if _, _, err := c.RunConfiguration(context.Background(), origin.URL+"/v1/run-configuration", "", ""); err == nil || !strings.Contains(err.Error(), "status 302") {
+			t.Errorf("%s: a run configuration through a redirect: %v", name, err)
+		}
+		status, _, err := c.Deliver(context.Background(), origin.URL+"/v1/events", "d1", []byte("[]"), "")
+		if err != nil || status != http.StatusFound || server.Accepted(status) {
+			t.Errorf("%s: a delivery through a redirect: %d %v", name, status, err)
+		}
+		if err := c.Ping(context.Background(), origin.URL+"/v1/events", "d2", []byte("[]")); !errors.Is(err, server.ErrNotAccepted) {
+			t.Errorf("%s: a ping through a redirect: %v", name, err)
+		}
+	}
+	if n := elsewhere.Load(); n != 0 {
+		t.Errorf("the host a redirect named saw %d requests", n)
 	}
 }

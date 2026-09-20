@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,12 +42,29 @@ type control struct {
 	store *receiver.File
 	// refuse, when set, is the status every request gets instead of an answer.
 	refuse atomic.Int32
-	// hits counts every request; discoveries the discovery fetches.
-	hits, discoveries atomic.Int32
+	// hits counts every request; discoveries the discovery fetches; fetches the run
+	// configuration fetches.
+	hits, discoveries, fetches atomic.Int32
 	// run is the run configuration served, nil for none; digest is its digest.
 	mu     sync.Mutex
 	run    []byte
 	digest string
+	// answered, when set, is the run configuration digest the answers to a delivery
+	// carry instead of the served document's.
+	answered string
+}
+
+// answering sets the run configuration digest on a delivery's answer.
+type answering struct {
+	http.ResponseWriter
+	digest string
+}
+
+func (a answering) WriteHeader(code int) {
+	if a.Header().Get("X-Qory-Run-Configuration") != "" {
+		a.Header().Set("X-Qory-Run-Configuration", a.digest)
+	}
+	a.ResponseWriter.WriteHeader(code)
 }
 
 func newControl(t *testing.T) *control {
@@ -80,9 +98,18 @@ func newControl(t *testing.T) *control {
 		if r.URL.Path == "/.well-known/qory-configuration" {
 			c.discoveries.Add(1)
 		}
+		if r.URL.Path == "/v1/run-configuration" {
+			c.fetches.Add(1)
+		}
 		if code := c.refuse.Load(); code != 0 {
 			w.WriteHeader(int(code))
 			return
+		}
+		c.mu.Lock()
+		answered := c.answered
+		c.mu.Unlock()
+		if answered != "" && r.Method == http.MethodPost {
+			w = answering{w, answered}
 		}
 		h.ServeHTTP(w, r)
 	}))
@@ -549,6 +576,126 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	sp.Server = c.server()
 	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "run configuration "+c.srv.URL+"/v1/run-configuration") {
 		t.Errorf("a run configuration that is not one: %v", err)
+	}
+}
+
+// waiting is a run whose runtime waits for the test's go-ahead and then, as the fake
+// runtime, reaches what its environment names: a run to reload under.
+type waiting struct {
+	t    *testing.T
+	dir  string
+	gate string
+	done chan struct{}
+	res  *session.Result
+	err  error
+	mu   sync.Mutex
+	said []string
+}
+
+func startWaiting(t *testing.T, sp session.Spec) *waiting {
+	t.Helper()
+	w := &waiting{t: t, gate: filepath.Join(t.TempDir(), "go"), done: make(chan struct{})}
+	sp.Forwarder = nil
+	sp.Command, sp.Args = "sh", []string{"-c", `while [ ! -f "$1" ]; do sleep 0.05; done; exec "$0"`, os.Args[0], w.gate}
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp.Report = func(l string) {
+		t.Log("report:", l)
+		w.mu.Lock()
+		w.said = append(w.said, l)
+		w.mu.Unlock()
+	}
+	w.dir = filepath.Join(sp.Dir, ".qory", "runs", sp.RunID)
+	go func() {
+		defer close(w.done)
+		w.res, w.err = session.Run(context.Background(), sp)
+	}()
+	return w
+}
+
+// applied is how many policy_applied events the record holds so far.
+func (w *waiting) applied() int {
+	b, _ := os.ReadFile(filepath.Join(w.dir, "events.jsonl"))
+	return strings.Count(string(b), `"ai.qory.run.policy_applied"`)
+}
+
+// reported says whether a report line holding the text was made.
+func (w *waiting) reported(text string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.ContainsFunc(w.said, func(l string) bool { return strings.Contains(l, text) })
+}
+
+// finish lets the runtime go and returns the run's events.
+func (w *waiting) finish() []map[string]any {
+	w.t.Helper()
+	if err := os.WriteFile(w.gate, nil, 0o644); err != nil {
+		w.t.Fatal(err)
+	}
+	<-w.done
+	if w.err != nil {
+		w.t.Fatal(w.err)
+	}
+	return events(w.t, w.res)
+}
+
+func digest(c byte) string { return "sha256=" + strings.Repeat(string(c), 64) }
+
+// TestAReloadIsAsStrictAsAStart pins a reload without a wall: path rules the proxy
+// cannot hold take their hosts out of the allow list, so they are denied and the event
+// claims no paths; a policy that selects credentials, which a start refuses without a
+// wall, fails the reload and leaves the policy in force; and a run configuration the
+// server answered is not fetched again until the answered digest changes, nor is one
+// that turns out to be the one in force put in force again.
+func TestAReloadIsAsStrictAsAStart(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, digest('1'))
+	sp := spec(t, nil, "FAKE_ALLOWED_URL="+origin.URL+"/after")
+	sp.Server = c.server()
+	w := startWaiting(t, sp)
+	waitFor(t, func() bool { return w.applied() == 1 })
+
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1","api.example"],"paths":{"127.0.0.1":["/ok/*"]}}}`, digest('2'))
+	waitFor(t, func() bool { return w.applied() == 2 })
+	if !w.reported("path rules, which need a wall") {
+		t.Error("nobody was told the path rules are not held")
+	}
+
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]},"credentials":[{"name":"model"}]}`, digest('3'))
+	waitFor(t, func() bool { return w.reported("selects credentials, which need a wall") })
+	fetched := c.fetches.Load()
+	time.Sleep(2500 * time.Millisecond)
+	if n := c.fetches.Load(); n != fetched {
+		t.Errorf("a run configuration that was refused was fetched %d more times under the same answered digest", n-fetched)
+	}
+
+	// The answers name a digest the run does not hold, and the fetch finds the
+	// document in force: fetched once, nothing put in force, nothing said.
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1","api.example"],"paths":{"127.0.0.1":["/ok/*"]}}}`, digest('2'))
+	c.mu.Lock()
+	c.answered = digest('4')
+	c.mu.Unlock()
+	waitFor(t, func() bool { return c.fetches.Load() == fetched+1 })
+	time.Sleep(2500 * time.Millisecond)
+	if n := c.fetches.Load(); n != fetched+1 || w.applied() != 2 {
+		t.Errorf("the document in force under another answered digest: %d fetches, %d policy_applied", n-fetched, w.applied())
+	}
+	evs := w.finish()
+	pa := ofType(evs, "ai.qory.run.policy_applied")
+	if len(pa) != 2 {
+		t.Fatalf("policy_applied events: %v", pa)
+	}
+	then := data(pa[1])
+	if fmt.Sprint(then["allow"]) != "[api.example]" || then["paths"] != nil || then["run_configuration"] != digest('2') || then["credentials"] != nil {
+		t.Errorf("the second policy_applied %v", then)
+	}
+	egress := ofType(evs, "ai.qory.run.egress")
+	if len(egress) != 1 || data(egress[0])["decision"] != "denied" || data(egress[0])["host"] != "127.0.0.1" || data(egress[0])["outcome"] != "refused" {
+		t.Errorf("egress to a host whose paths cannot be held %v", egress)
+	}
+	if w.reported("context canceled") {
+		t.Error("the run's end was reported as a failed reload")
 	}
 }
 
