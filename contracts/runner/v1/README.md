@@ -39,16 +39,18 @@ directory, `v2`, never a change in place.
 The runner's duties, in the order that matters when they conflict:
 
 1. **Policy.** The runner reads one policy document, pinned for the run, that can only
-   narrow what the binary allows: the egress mode, the allow list, the paths of a host,
-   and which of the machine's credentials the run may use. A policy that cannot be read means no run. No policy means observe
-   everything and deny nothing. Nothing in a policy grants; a stale or failed policy
-   degrades toward more restrictive, never toward more permissive.
+   narrow what the binary allows: the egress mode, the allow list, the deny list, the
+   paths of a host, and which of the machine's credentials the run may use. A policy
+   that cannot be read means no run. No policy means observe everything and deny
+   nothing. Nothing in a policy grants; a stale or failed policy degrades toward more
+   restrictive, never toward more permissive.
 2. **Egress.** The runner owns an HTTP proxy, on loopback or, behind a wall, on the one
    address the enclosure reaches (§The wall), and starts the session behind it.
    Every connection the session opens through the proxy is observed and recorded as one
    event: the host, the port, whether it was a `CONNECT` tunnel or a plain request, the
-   decision, and the rule that made it. In enforce mode a connection to a host outside
-   the allow list is denied. A denied attempt is recorded and the session continues; a
+   decision, and the rule that made it. A connection to a host the deny list names is
+   denied in either mode; in enforce mode a connection to a host outside the allow
+   list is denied as well. A denied attempt is recorded and the session continues; a
    denial never ends a run.
 3. **Credentials.** The session holds none of the runner's. On a developer machine the
    session runs with the developer's own environment. Behind a wall the runner holds the
@@ -151,8 +153,8 @@ One run, on a developer machine, with a server configured:
    Otherwise the policy is the one the command gave. It validates the policy once.
    Refused by the schema: the run does not start. Absent: mode `observe`, everything
    allowed and recorded. Present: pinned, with the digest of its canonical JSON as its
-   stamp. The allow list is the policy's entries; the hosts the harness declared are
-   reported and decide nothing (§The policy).
+   stamp. The allow list and the deny list are the policy's entries; the hosts the
+   harness declared are reported and decide nothing (§The policy).
 5. It starts the proxy on a loopback port and sets `HTTP_PROXY`, `HTTPS_PROXY` and
    `NO_PROXY` in the session's environment, in upper and lower case, with
    `NO_PROXY=localhost,127.0.0.1,::1` so a local MCP server or model endpoint still
@@ -222,28 +224,39 @@ egress:
     - api.anthropic.com
     - github.com
     - "*.github.com"           # every host below github.com; not github.com itself
+  deny:
+    - gist.github.com          # denied in either mode, whatever allow says
 ```
 
 | Field | Meaning |
 |---|---|
 | `version` | `1`. A runner refuses a version it does not read, naming it |
-| `egress.mode` | `observe`: every connection is allowed and recorded. `enforce`: a connection to a host outside `allow` is denied and recorded |
+| `egress.mode` | `observe`: every connection is recorded, and only a host `deny` names is denied. `enforce`: a connection to a host outside `allow` is denied as well, and recorded |
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. Absent is empty, and `enforce` with an empty list reaches nothing |
+| `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, whatever `allow` says, and the entry is the rule reported. Absent is empty |
 | `egress.paths` | by host, in `allow`'s grammar, the paths the session may ask of it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. An empty list is no path at all |
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say. A policy defines none (§Credentials) |
 
 **The harness's declared hosts.** The harness compose reports the hosts its modules
 declared, the command hands that list to the runner, and `ai.qory.run.policy_applied`
 reports it as `harness_hosts`; it decides nothing. The policy alone decides: `allow` is
-the policy's list, and a declared host the policy does not cover is denied under
-`enforce` like any other. The grammar of a declared host is that of `egress.allow`,
-defined here once; the harness contract copies it and cites this document.
+the policy's list, a declared host the policy does not cover is denied under `enforce`
+like any other, and one `deny` names is denied in either mode. The grammar of a declared
+host is that of `egress.allow`, defined here once; the harness contract copies it and
+cites this document.
 
 **Matching a connection.** The host of a `CONNECT` request is its authority; the host of
 a plain request is the authority of its absolute-form target, never its `Host` header.
-Host names are compared lower-case; an IP literal matches only an identical entry. The
-first entry that matches is the rule reported. A denial is a `403 Forbidden` with a
-one-line text body naming the host and the mode; a tunnel is never opened for it.
+Host names are compared lower-case; an IP literal matches only an identical entry.
+`deny` is decided first: when an entry of it covers the host, the connection is denied
+in either mode and that entry is the rule reported; only then `allow` and the mode
+decide. `deny` beats `allow` whatever the shapes: `allow: ["*.example"]` with
+`deny: ["tracker.example"]` denies `tracker.example` and reaches `api.example`, and a
+host both lists name is denied. A denied host is never reached, so its paths and a
+credential for it never apply; the guard of a walled proxy (§The wall) decides before
+either list. In each list the first entry that matches is the rule reported. A denial
+is a `403 Forbidden` with a one-line text body naming the host and the mode; a tunnel
+is never opened for it.
 
 **Matching a path.** On a terminated host every request is decided, by the policy's
 paths for the host and by the paths of the credential that is for it, and it passes
@@ -368,7 +381,7 @@ The types, one namespace. The runner's own:
 |---|---|---|
 | `ai.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version` |
 | `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
-| `ai.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration took effect | `mode`, `allow`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `terminated` |
+| `ai.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration took effect | `mode`, `allow`, `deny`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `terminated` |
 | `ai.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `ai.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size took effect; never on pipes | `cols`, `rows` |
 | `ai.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_method`, `path`, `path_rule`, `credential` |
@@ -422,10 +435,11 @@ have the shape the tool gave them, `error` is display text, and the enumerations
 `config` or `fetched`; `url` is where a fetched one was fetched from; `digest` is the
 runner's own hex sha256 of the policy document's canonical JSON, with `config` and
 `fetched`; `run_configuration` is the server's digest of the run configuration document
-as its header carried it, with `fetched`. `ai.qory.run.egress` says what became of the
-connection in `outcome`: `connected`, the dial succeeded; `dial_failed`, allowed and
-the dial failed; `refused`, not dialled, because the policy or the wall's guard denied
-it, or closed by a reload.
+as its header carried it, with `fetched`; `allow` and `deny` are the policy's two lists
+as written, `deny` the hosts denied by name in either mode. `ai.qory.run.egress` says
+what became of the connection in `outcome`: `connected`, the dial succeeded;
+`dial_failed`, allowed and the dial failed; `refused`, not dialled, because the policy
+or the wall's guard denied it, or closed by a reload.
 
 The log is an event like the others. `bytes` is base64 of the chunk as the runtime
 wrote it, terminal escapes included. On pipes the runtime's standard output and standard
@@ -829,7 +843,7 @@ builds none.
 
 | Directory | Holds | Validated against |
 |---|---|---|
-| `fixtures/policy/` | policy documents that are accepted | `policy.schema.json` |
+| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the published key and secret | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server answers: events only, with a run section, with a section this revision does not know | `configuration.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server answers | `run-configuration.schema.json` |

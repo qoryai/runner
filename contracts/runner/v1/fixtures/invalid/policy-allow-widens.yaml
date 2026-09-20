@@ -2,4 +2,5 @@
 version: 1
 egress:
   mode: observe
-  deny: []
+  grant:
+    - "*"

@@ -18,12 +18,21 @@
       "required": ["mode"],
       "properties": {
         "mode": {
-          "description": "observe records every connection and denies none; enforce denies a connection to a host outside allow and records the denial. Enforce with no allow list reaches nothing.",
+          "description": "observe records every connection and denies only what deny names; enforce denies a connection to a host outside allow as well, and records the denial. Enforce with no allow list reaches nothing.",
           "type": "string",
           "enum": ["observe", "enforce"]
         },
         "allow": {
           "description": "Hosts the session may reach: a lower-case host name, or a *. suffix matching every host below it and not the apex itself. No ports, no paths, no schemes: paths have a key of their own. Absent means an empty list.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+          }
+        },
+        "deny": {
+          "description": "Hosts the session may not reach, in allow's grammar, in either mode: a host an entry here covers is denied before allow and before the mode are consulted, and the denial is recorded with the entry as its rule. Absent means an empty list.",
           "type": "array",
           "uniqueItems": true,
           "items": {

@@ -1,0 +1,12 @@
+# Observe with a deny list: every connection is recorded and let through, except a host
+# deny names, which is denied under observe as under enforce. tracker.example is denied
+# though the allowed *.example covers it; under observe allow itself decides nothing.
+version: 1
+egress:
+  mode: observe
+  allow:
+    - api.example
+    - "*.example"
+  deny:
+    - tracker.example
+    - "*.ads.example"
