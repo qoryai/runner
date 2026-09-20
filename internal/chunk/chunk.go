@@ -164,6 +164,10 @@ func (t *Terminal) Flush() {
 // n, or before the multibyte character that would straddle n, and at n after all when
 // the bytes around it are not UTF-8.
 func boundary(buf []byte, n int) int {
+	// Nothing follows n: no character can straddle it.
+	if n >= len(buf) {
+		return n
+	}
 	for i := n; i > n-utf8.UTFMax && i > 0; i-- {
 		if utf8.RuneStart(buf[i]) {
 			return i

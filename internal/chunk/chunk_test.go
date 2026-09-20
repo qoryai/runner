@@ -166,3 +166,17 @@ func lengths(s []string) []int {
 	}
 	return out
 }
+
+// TestTerminalTakesAWriteOfExactlySize pins the edge a pseudo-terminal's reads hit: a
+// write that brings what is held to exactly Size bytes is one chunk, not a panic.
+func TestTerminalTakesAWriteOfExactlySize(t *testing.T) {
+	var got []string
+	w := chunk.NewTerminal(func(b []byte) { got = append(got, string(b)) }, time.Hour)
+	for i := 0; i < 4; i++ {
+		w.Write([]byte(strings.Repeat("x", chunk.Size/4)))
+	}
+	w.Flush()
+	if len(got) != 1 || len(got[0]) != chunk.Size {
+		t.Fatalf("%d chunks, first of %d bytes", len(got), len(got[0]))
+	}
+}
