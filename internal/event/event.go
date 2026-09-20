@@ -29,6 +29,7 @@ const (
 	RunStarted    = "ai.qory.run.started"
 	RunHeartbeat  = "ai.qory.run.heartbeat"
 	RunLog        = "ai.qory.run.log"
+	RunResized    = "ai.qory.run.resized"
 	RunEgress     = "ai.qory.run.egress"
 	PolicyApplied = "ai.qory.run.policy_applied"
 	RunExited     = "ai.qory.run.exited"

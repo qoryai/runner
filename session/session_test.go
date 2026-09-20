@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,8 +18,11 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/policy"
@@ -732,6 +736,105 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 	if l := ofType(events(t, res), "ai.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
 		t.Errorf("log %v", l)
 	}
+	if size := data(events(t, res)[0])["terminal"]; fmt.Sprint(size) != "map[cols:80 rows:24]" {
+		t.Errorf("run.started terminal %v; want the default when stdin is not a terminal", size)
+	}
+}
+
+// TestInteractiveRunFollowsTheTerminalSize pins the size in the record: the
+// pseudo-terminal starts at the size of the terminal stdin is, reported in run.started,
+// and when that terminal is resized the pseudo-terminal follows and run.resized says so
+// at the sequence where it did, before the output drawn on the new size.
+func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
+	master, tty, err := pty.Open()
+	if err != nil {
+		t.Skip("no pseudo-terminal:", err)
+	}
+	defer master.Close()
+	defer tty.Close()
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 100, Rows: 40}); err != nil {
+		t.Fatal(err)
+	}
+	var stream, out syncBuffer
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Interactive = true
+	sp.Stdin = tty
+	sp.Stdout = &out
+	sp.Events = &stream
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "stty size; read line; stty size"}
+	done := make(chan *session.Result, 1)
+	go func() {
+		res, err := session.Run(context.Background(), sp)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- res
+	}()
+	waitFor(t, func() bool { return strings.Contains(out.String(), "40 100") })
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 120, Rows: 50}); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return strings.Contains(stream.String(), `"ai.qory.run.resized"`) })
+	if _, err := io.WriteString(master, "go\n"); err != nil {
+		t.Fatal(err)
+	}
+	res := <-done
+	if res == nil {
+		t.FailNow()
+	}
+	evs := events(t, res)
+	if size := data(evs[0])["terminal"]; fmt.Sprint(size) != "map[cols:100 rows:40]" {
+		t.Errorf("run.started terminal %v", size)
+	}
+	resized := ofType(evs, "ai.qory.run.resized")
+	if len(resized) != 1 || fmt.Sprint(data(resized[0])) != "map[cols:120 rows:50]" {
+		t.Fatalf("run.resized %v", resized)
+	}
+	// The sequence: what was drawn before the resize is logged before it, what was
+	// drawn after it after.
+	var before, after []byte
+	seen := false
+	for _, e := range evs {
+		if e["type"] == "ai.qory.run.resized" {
+			seen = true
+		} else if e["type"] == "ai.qory.run.log" {
+			b, _ := base64.StdEncoding.DecodeString(data(e)["bytes"].(string))
+			if seen {
+				after = append(after, b...)
+			} else {
+				before = append(before, b...)
+			}
+		}
+	}
+	if !strings.Contains(string(before), "40 100") || strings.Contains(string(before), "50 120") {
+		t.Errorf("logged before the resize: %q", before)
+	}
+	if !strings.Contains(string(after), "50 120") {
+		t.Errorf("logged after the resize: %q", after)
+	}
+}
+
+// syncBuffer is a buffer written from the run and read by the test.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // TestContextEndStopsTheRuntime pins that a cancelled context ends the session with a

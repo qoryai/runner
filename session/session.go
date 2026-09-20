@@ -434,6 +434,14 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = v
 	}
+	// The pseudo-terminal's size is in the record, so a replay can lay the redraws of
+	// a full-screen program over each other: the size it starts with here, each change
+	// as run.resized.
+	var cols, rows int
+	if spec.Interactive {
+		cols, rows = terminalSize(spec.Stdin)
+		started["terminal"] = map[string]any{"cols": cols, "rows": rows}
+	}
 	if spec.Wall != nil {
 		started["wall"] = spec.Wall.Name()
 		started["image"] = spec.Image
@@ -525,7 +533,8 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if !rt.ReadsOutput() {
 		output = nil
 	}
-	proc := &process{stop: stopSignals[spec.StopSignal], grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output}
+	resized := func(cols, rows int) { write(event.RunResized, map[string]any{"cols": cols, "rows": rows}) }
+	proc := &process{stop: stopSignals[spec.StopSignal], grace: spec.StopGrace, command: launch.Command, args: launch.Args, env: launch.Env, dir: launch.Dir, stdin: spec.Stdin, stdout: spec.Stdout, stderr: spec.Stderr, logs: logs, output: output, cols: cols, rows: rows, resized: resized}
 	stop := heartbeat(ctx, spec.Heartbeat, start, write)
 	// The limit ends the runtime and nothing else: the sinks and the wall are closed on
 	// the caller's context, as after any exit.

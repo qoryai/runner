@@ -165,9 +165,10 @@ One run, on a developer machine, with a server configured:
    into the run directory; the composed home is not modified.
 7. It emits `ai.qory.run.started` and `ai.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when interactive, on pipes otherwise.
-8. While the program runs: every chunk of output is one `ai.qory.run.log`; every
-   connection through the proxy is one `ai.qory.run.egress`; every record the descriptor
-   matches is one session event; every thirty seconds one `ai.qory.run.heartbeat`.
+8. While the program runs: every chunk of output is one `ai.qory.run.log`; on a
+   pseudo-terminal every resize is one `ai.qory.run.resized`; every connection through
+   the proxy is one `ai.qory.run.egress`; every record the descriptor matches is one
+   session event; every thirty seconds one `ai.qory.run.heartbeat`.
 9. The program exits. The runner drains the socket, so a hook on the runtime's last
    event is still read, emits `ai.qory.run.exited`, gives the sinks fifteen seconds to
    flush, reports what the server did not accept, and returns the program's exit
@@ -366,9 +367,10 @@ The types, one namespace. The runner's own:
 | Type | When | Data |
 |---|---|---|
 | `ai.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version` |
-| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
+| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
 | `ai.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration took effect | `mode`, `allow`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `terminated` |
-| `ai.qory.run.log` | one per chunk of output: one line or 4096 bytes, whichever comes first | `stream`, `bytes` |
+| `ai.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
+| `ai.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size took effect; never on pipes | `cols`, `rows` |
 | `ai.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_method`, `path`, `path_rule`, `credential` |
 | `ai.qory.run.heartbeat` | every `interval_seconds` while the runtime runs | `elapsed_seconds`, `interval_seconds` |
 | `ai.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
@@ -426,10 +428,26 @@ the dial failed; `refused`, not dialled, because the policy or the wall's guard 
 it, or closed by a reload.
 
 The log is an event like the others. `bytes` is base64 of the chunk as the runtime
-wrote it, terminal escapes included; a chunk is cut at a line break or at 4096 bytes and
-never at a character boundary, so a multibyte character may straddle two chunks and the
-concatenation, not a chunk, is text. On a pseudo-terminal `stream` is `terminal`; on
-pipes the runtime's standard output and standard error are chunked apart.
+wrote it, terminal escapes included. On pipes the runtime's standard output and standard
+error are chunked apart, `stream` is `stdout` or `stderr`, and a chunk is cut at a line
+break or at 4096 bytes, whichever comes first, at a byte and not at a character: a
+multibyte character may straddle two chunks, and the concatenation, not a chunk, is
+text. On a pseudo-terminal `stream` is `terminal` and a line break cuts nothing: a
+full-screen program redraws on every keypress, and cut at line breaks its record is
+thousands of chunks of a few bytes. A terminal chunk is cut at 4096 bytes or once the
+runtime has written nothing for 50 ms after its last write, whichever comes first, so
+one redraw is one chunk, and never inside a multibyte character, so a chunk of UTF-8
+output is text on its own. A stream that never pauses is cut at 4096 bytes; what is held
+when the runtime exits is the last chunk.
+
+A replay lays the redraws of a full-screen program over each other, which takes the
+terminal's size, so the size is in the record. On a pseudo-terminal
+`ai.qory.run.started` carries `terminal`, the columns and rows the runtime started on:
+the runner's own terminal's when it has one, 80 by 24 otherwise. Each later change is
+one `ai.qory.run.resized` with the new size, at the sequence where it took effect: what
+the gap still held is cut before it, so the chunks before it were written to a terminal
+of the old size and the chunks after it to one of the new. On pipes there is no
+`terminal` and no resize.
 
 ## The record files
 

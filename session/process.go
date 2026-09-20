@@ -38,6 +38,28 @@ type process struct {
 	// output takes each JSON object the runtime prints as a line; nil when the
 	// runtime has no output source.
 	output func(map[string]any)
+	// cols and rows size the pseudo-terminal, and resized is told each time that size
+	// changes while the runtime runs. Neither means anything on pipes.
+	cols, rows int
+	resized    func(cols, rows int)
+}
+
+// The size a pseudo-terminal gets when the runner's own input is not a terminal, or
+// its size is unknown: the size a terminal has always been assumed to have.
+const (
+	defaultCols = 80
+	defaultRows = 24
+)
+
+// terminalSize is the size a run's pseudo-terminal starts with: the size of the terminal
+// stdin is, or the default when stdin is not a terminal or its size is unknown.
+func terminalSize(stdin io.Reader) (cols, rows int) {
+	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		if size, err := pty.GetsizeFull(f); err == nil && size.Cols > 0 && size.Rows > 0 {
+			return int(size.Cols), int(size.Rows)
+		}
+	}
+	return defaultCols, defaultRows
 }
 
 // exitStatus is how the runtime ended.
@@ -116,24 +138,34 @@ func (p *process) runPipes(ctx context.Context) (exitStatus, error) {
 	return status(cmd, err)
 }
 
-// runPTY runs the process on a pseudo-terminal: what it writes goes to the log as
-// terminal and to stdout, what stdin holds goes to it, and when stdin is a terminal
-// it is put in raw mode and its size follows.
+// runPTY runs the process on a pseudo-terminal of the process's size: what it writes
+// goes to the log as terminal, cut at the gap, and to stdout; what stdin holds goes to
+// it; and when stdin is a terminal it is put in raw mode and its size is followed, each
+// change reported.
 func (p *process) runPTY(ctx context.Context) (exitStatus, error) {
 	cmd := p.newCmd(ctx)
-	ptmx, err := pty.Start(cmd)
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(p.cols), Rows: uint16(p.rows)})
 	if err != nil {
 		return exitStatus{}, fmt.Errorf("%w: %v", ErrNotStarted, err)
 	}
 	defer ptmx.Close()
+	log := chunk.NewTerminal(p.logs("terminal"), chunk.Gap)
 	if f, ok := p.stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		restore := attach(f, ptmx)
+		apply := func(size *pty.Winsize) {
+			// What was drawn before the resize is logged before it, whatever the gap
+			// still holds; then the runtime learns the size, and the record does.
+			log.Flush()
+			pty.Setsize(ptmx, size)
+			if p.resized != nil {
+				p.resized(int(size.Cols), int(size.Rows))
+			}
+		}
+		restore := attach(f, p.cols, p.rows, apply)
 		defer restore()
 	}
 	go func() {
 		io.Copy(ptmx, p.stdin)
 	}()
-	log := chunk.New(p.logs("terminal"))
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -148,23 +180,31 @@ func (p *process) runPTY(ctx context.Context) (exitStatus, error) {
 	return status(cmd, err)
 }
 
-// attach puts a terminal in raw mode, sizes the pseudo-terminal like it and follows
-// its resizes until the returned function restores it.
-func attach(tty *os.File, ptmx *os.File) func() {
+// attach puts a terminal in raw mode and follows its resizes until the returned
+// function restores it: apply gets each size of the terminal that differs from the one
+// before, cols by rows at first. The returned function waits for a resize in progress,
+// so nothing is applied after it.
+func attach(tty *os.File, cols, rows int, apply func(size *pty.Winsize)) func() {
 	fd := int(tty.Fd())
 	state, err := term.MakeRaw(fd)
 	if err != nil {
 		state = nil
 	}
 	resize := func() {
-		if size, err := pty.GetsizeFull(tty); err == nil {
-			pty.Setsize(ptmx, size)
+		size, err := pty.GetsizeFull(tty)
+		if err != nil || size.Cols == 0 || size.Rows == 0 || (int(size.Cols) == cols && int(size.Rows) == rows) {
+			return
 		}
+		cols, rows = int(size.Cols), int(size.Rows)
+		apply(size)
 	}
+	// The terminal may have been resized between the start and here.
 	resize()
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGWINCH)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		for range ch {
 			resize()
 		}
@@ -172,6 +212,7 @@ func attach(tty *os.File, ptmx *os.File) func() {
 	return func() {
 		signal.Stop(ch)
 		close(ch)
+		<-done
 		if state != nil {
 			term.Restore(fd, state)
 		}
