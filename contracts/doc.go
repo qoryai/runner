@@ -2,9 +2,10 @@
 // schemas.
 //
 // The contract is the set of documents the runner reads and writes: the policy, the
-// webhook configuration, the events, a batch, a record and a runtime descriptor. Each has
-// a JSON schema whose $id is [Base] followed by the file's path under runner/v1, so a
-// $ref between schemas resolves without a network. [Compiler] returns a compiler that
+// server, the configuration and the run configuration a server answers, the events, a
+// batch, a record and a runtime descriptor. Each has a JSON schema whose $id is [Base]
+// followed by the file's path under runner/v1, so a $ref between schemas resolves
+// without a network. [Compiler] returns a compiler that
 // knows every schema of the contract under that $id, and [Compile] compiles one by its
 // file name, "policy.schema.json" say.
 //

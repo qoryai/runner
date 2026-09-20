@@ -2,15 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/run.policy_applied.schema.json",
   "title": "ai.qory.run.policy_applied",
-  "description": "The policy the run is pinned to, as read once before the runtime started, and the effective allow list after the declared egress narrowed it.",
+  "description": "The policy the run is pinned to, as read before the runtime started, with where it came from. Emitted once at the start, and again at the sequence where a new run configuration from the server took effect.",
   "type": "object",
   "additionalProperties": false,
   "required": ["mode", "allow", "source"],
   "properties": {
     "mode": {"type": "string", "enum": ["observe", "enforce"]},
-    "allow": {"description": "The effective allow list: the policy's entries, or when a declaration was given, the declared entries the policy covers.", "type": "array", "items": {"type": "string", "minLength": 1}},
-    "source": {"description": "config when a policy document was given to the runner; none when there was none and the runner observes everything.", "type": "string", "enum": ["config", "none"]},
-    "digest": {"description": "sha256 of the policy document as canonical JSON, hex, when source is config: the version stamp of the run's policy, the same for the same policy however it was written.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "allow": {"description": "The allow list in force: the policy's entries. The hosts the harness declared do not narrow it.", "type": "array", "items": {"type": "string", "minLength": 1}},
+    "source": {"description": "config when a policy document was given to the runner; fetched when the policy is the security_policy of a run configuration the server answered; none when there was neither and the runner observes everything.", "type": "string", "enum": ["none", "config", "fetched"]},
+    "url": {"description": "The URL the run configuration was fetched from, without its query, when source is fetched.", "type": "string", "format": "uri", "minLength": 1},
+    "digest": {"description": "sha256 of the policy document as canonical JSON, hex, when source is config or fetched: the version stamp of the run's policy, the same for the same policy however it was written. The runner's own.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header carried it, when source is fetched. The server's own and opaque: the runner never recomputes it.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
     "paths": {"description": "The policy's path rules, by host, when it has any.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "credentials": {
       "description": "The credentials the run holds outside the enclosure, as resolved before the runtime started: where each goes and how. Never a token.",
@@ -28,6 +30,20 @@
       }
     },
     "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for and the ones with path rules. Every other host is a tunnel the proxy does not read.", "type": "array", "items": {"type": "string", "minLength": 1}},
-    "declared": {"description": "The egress the harness declared, as handed to the runner, when it was.", "type": "array", "items": {"type": "string", "minLength": 1}}
-  }
+    "harness_hosts": {"description": "The egress the harness declared, as handed to the runner, when it was. Information only: it decides nothing.", "type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"source": {"const": "fetched"}}},
+      "then": {"required": ["url", "digest", "run_configuration"]}
+    },
+    {
+      "if": {"properties": {"source": {"const": "config"}}},
+      "then": {"required": ["digest"]}
+    },
+    {
+      "if": {"properties": {"source": {"const": "none"}}},
+      "then": {"not": {"anyOf": [{"required": ["url"]}, {"required": ["digest"]}, {"required": ["run_configuration"]}]}}
+    }
+  ]
 }

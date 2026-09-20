@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/server.schema.json",
+  "title": "Server",
+  "description": "The server the runner is a client of: where it fetches its configuration from, and the access key and secret it signs every request with. Lives outside the checkout, beside the policy. Configuring a server makes the run fail closed: no run starts unless the server answers the discovery fetch and the ping.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "url", "access_key", "secret"],
+  "properties": {
+    "version": {
+      "description": "The document format. A runner refuses a version it does not read.",
+      "const": 1
+    },
+    "url": {
+      "description": "The server's origin: scheme and host, with a port when there is one, and nothing after it. https, or http to a loopback address only. The runner fetches its configuration from /.well-known/qory-configuration under it.",
+      "type": "string",
+      "format": "uri",
+      "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)$"
+    },
+    "access_key": {
+      "description": "The key the server knows the runner by, sent in clear on every request: ak_ and 16 lower-case Crockford base32 characters.",
+      "type": "string",
+      "pattern": "^ak_[0-9a-hjkmnp-tv-z]{16}$"
+    },
+    "secret": {
+      "description": "The key of the HMAC SHA-256 signature on every request. It signs and never travels: shared with the server and with nothing else, it is the credential of this run's reporting.",
+      "type": "string",
+      "minLength": 16
+    }
+  }
+}

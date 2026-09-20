@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "events": {
+    "url": "http://127.0.0.1:8787/v1/events",
+    "types": ["*"]
+  },
+  "run": {
+    "url": "http://127.0.0.1:8787/v1/run-configuration"
+  },
+  "artifacts": {
+    "url": "http://127.0.0.1:8787/v1/artifacts"
+  }
+}

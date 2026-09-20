@@ -1,4 +1,5 @@
 # Plain http is for loopback only; a secret signs, it does not encrypt.
 version: 1
-url: http://receiver.example/events
+url: http://qory.example
+access_key: ak_f1xt0re000000000
 secret: fixture-secret-not-a-real-one

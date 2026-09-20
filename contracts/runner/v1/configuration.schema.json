@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qory.dev/contracts/runner/v1/configuration.schema.json",
+  "title": "Configuration",
+  "description": "What a server answers to a signed GET of /.well-known/qory-configuration: where the runner posts its events, and where it fetches a run configuration when the server offers one. A section a runner does not know is ignored; an added section is a new revision of this contract.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version", "events"],
+  "properties": {
+    "version": {
+      "description": "The document format. A runner refuses a version it does not read.",
+      "const": 1
+    },
+    "events": {
+      "description": "Where the events go and which.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "types"],
+      "properties": {
+        "url": {
+          "description": "The endpoint every batch is posted to. https, or http to a loopback address only.",
+          "type": "string",
+          "format": "uri",
+          "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
+        },
+        "types": {
+          "description": "The event types the server wants, by full type name, or * for every type. The ping is always sent.",
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*|ai\\.qory\\.[a-z_]+(\\.[a-z_]+)*)$"
+          }
+        }
+      }
+    },
+    "run": {
+      "description": "Where the run configuration is fetched from, when the server offers one. A server that names no run section offers none, and the run's policy is the machine's.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "description": "The endpoint the run configuration is fetched from with a signed GET, the run's forge and repository labels as its query. https, or http to a loopback address only.",
+          "type": "string",
+          "format": "uri",
+          "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
+        }
+      }
+    }
+  }
+}

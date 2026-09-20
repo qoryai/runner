@@ -9,10 +9,11 @@
     "sequence": "0000000001",
     "dataschema": "https://qory.dev/contracts/runner/v1/events/ping.schema.json",
     "data": {
-      "runner_version": "0.1.0",
+      "runner_version": "0.4.0",
       "events": [
         "*"
-      ]
+      ],
+      "contract_version": 1
     }
   }
 ]

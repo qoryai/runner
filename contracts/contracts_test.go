@@ -1,6 +1,10 @@
 package contracts_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"path"
@@ -72,19 +76,23 @@ func TestEverySchemaCompiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n < 20 {
+	if n < 22 {
 		t.Errorf("found %d schemas; want the envelope, the batch, the record, the policy, "+
-			"the webhook, the descriptor and one per event type", n)
+			"the server, the configuration, the run configuration, the descriptor and one "+
+			"per event type", n)
 	}
 }
 
-// TestPolicyAndWebhookFixturesValidate pins that every policy and webhook fixture passes
-// its schema.
-func TestPolicyAndWebhookFixturesValidate(t *testing.T) {
-	s := compile(t, "policy.schema.json", "webhook.schema.json")
+// TestDocumentFixturesValidate pins that every policy, server, configuration and run
+// configuration fixture passes its schema.
+func TestDocumentFixturesValidate(t *testing.T) {
+	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
+		"run-configuration.schema.json")
 	dirs := map[string]string{
-		"fixtures/policy":  "policy.schema.json",
-		"fixtures/webhook": "webhook.schema.json",
+		"fixtures/policy":            "policy.schema.json",
+		"fixtures/server":            "server.schema.json",
+		"fixtures/configuration":     "configuration.schema.json",
+		"fixtures/run-configuration": "run-configuration.schema.json",
 	}
 	for dir, schema := range dirs {
 		for _, f := range files(t, dir) {
@@ -100,16 +108,26 @@ func TestPolicyAndWebhookFixturesValidate(t *testing.T) {
 }
 
 // TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails
-// the schema its name starts with: a policy that widens, a webhook without a secret, an
-// event with an unpadded sequence, a descriptor with an expression.
+// the schema its name starts with: a policy that widens, a server without a key, a
+// configuration without events, an event with an unpadded sequence, a descriptor with
+// an expression. The longest schema name the file name starts with is the schema, so
+// run-configuration-no-policy is held to the run configuration and not to a schema
+// named run.
 func TestInvalidFixturesAreRefused(t *testing.T) {
-	s := compile(t, "policy.schema.json", "webhook.schema.json", "event.schema.json",
-		"batch.schema.json", "descriptor.schema.json", "record.schema.json")
+	s := compile(t, "policy.schema.json", "server.schema.json", "configuration.schema.json",
+		"run-configuration.schema.json", "event.schema.json", "batch.schema.json",
+		"descriptor.schema.json", "record.schema.json")
 	for _, f := range files(t, "fixtures/invalid") {
-		kind, _, _ := strings.Cut(path.Base(f), "-")
+		kind := ""
+		for name := range s {
+			prefix := strings.TrimSuffix(name, ".schema.json")
+			if strings.HasPrefix(path.Base(f), prefix+"-") && len(prefix) > len(kind) {
+				kind = prefix
+			}
+		}
 		schema, ok := s[kind+".schema.json"]
 		if !ok {
-			t.Errorf("%s: no schema named by the prefix %q", f, kind)
+			t.Errorf("%s: no schema named by the prefix", f)
 			continue
 		}
 		var doc any
@@ -204,6 +222,98 @@ func TestBatchFixturesValidate(t *testing.T) {
 		}
 		if err := s["batch.schema.json"].Validate(doc); err != nil {
 			t.Errorf("%s: %v", f, err)
+		}
+	}
+}
+
+// TestSignedFixtures pins the shape of every request under fixtures/signed, what any
+// receiver is replayed: a method the contract signs, a target from the root, the
+// headers every request carries and the ones its method adds, a body on a POST that is
+// a batch and none on a GET, a status a receiver answers and a note. On a request a
+// receiver accepts, the signature is the HMAC under the published secret, over the body
+// on a POST and over the canonical string on a GET, so the published signatures cannot
+// drift from the fixtures they sign.
+func TestSignedFixtures(t *testing.T) {
+	s := compile(t, "batch.schema.json")
+	const secret = "fixture-secret-not-a-real-one"
+	const key = "ak_f1xt0re000000000"
+	for _, f := range files(t, "fixtures/signed") {
+		doc, err := contracts.Document(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, _ := doc.(map[string]any)
+		method, _ := m["method"].(string)
+		target, _ := m["target"].(string)
+		headers, _ := m["headers"].(map[string]any)
+		expect, _ := m["expect"].(json.Number)
+		note, _ := m["note"].(string)
+		if method != "GET" && method != "POST" {
+			t.Errorf("%s: method %q; want GET or POST", f, method)
+		}
+		if !strings.HasPrefix(target, "/") {
+			t.Errorf("%s: target %q; want a path from the root", f, target)
+		}
+		if note == "" {
+			t.Errorf("%s: no note", f)
+		}
+		status := expect.String()
+		if status != "200" && status != "202" && status != "401" {
+			t.Errorf("%s: expect %s; want 200, 202 or 401", f, status)
+		}
+		header := func(name string) string {
+			v, ok := headers[name].(string)
+			if !ok || v == "" {
+				t.Errorf("%s: no %s header", f, name)
+			}
+			return v
+		}
+		header("User-Agent")
+		accessKey := header("X-Qory-Access-Key")
+		if v := header("X-Qory-Contract-Version"); v != "1" {
+			t.Errorf("%s: X-Qory-Contract-Version %q; want 1", f, v)
+		}
+		signature := header("X-Qory-Signature-256")
+		var signed []byte
+		switch method {
+		case "POST":
+			body, ok := m["body"].(string)
+			if !ok {
+				t.Errorf("%s: a POST carries a body", f)
+				continue
+			}
+			header("X-Qory-Delivery")
+			if ct := header("Content-Type"); ct != "application/cloudevents-batch+json" {
+				t.Errorf("%s: Content-Type %q", f, ct)
+			}
+			if _, ok := headers["X-Qory-Timestamp"]; ok {
+				t.Errorf("%s: a POST carries no timestamp", f)
+			}
+			batch, err := contracts.Decode(f, []byte(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s["batch.schema.json"].Validate(batch); err != nil {
+				t.Errorf("%s: body: %v", f, err)
+			}
+			signed = []byte(body)
+		case "GET":
+			if m["body"] != nil {
+				t.Errorf("%s: a GET carries no body", f)
+			}
+			timestamp := header("X-Qory-Timestamp")
+			signed = []byte(method + "\n" + target + "\n" + timestamp)
+		}
+		if status[0] != '2' {
+			continue
+		}
+		if accessKey != key {
+			t.Errorf("%s: accepted under the key %q; want the published key", f, accessKey)
+		}
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(signed)
+		if want := "sha256=" + hex.EncodeToString(mac.Sum(nil)); signature != want {
+			t.Errorf("%s: signature %s; want %s under the published secret", f, signature, want)
 		}
 	}
 }

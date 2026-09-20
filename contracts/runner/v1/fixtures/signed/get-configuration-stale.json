@@ -1,0 +1,14 @@
+{
+  "method": "GET",
+  "target": "/.well-known/qory-configuration",
+  "headers": {
+    "User-Agent": "qory-runner/0.4.0",
+    "X-Qory-Access-Key": "ak_f1xt0re000000000",
+    "X-Qory-Contract-Version": "1",
+    "X-Qory-Timestamp": "1699999000",
+    "X-Qory-Signature-256": "sha256=7e5adf468f9a6c7f732718bece01f1c8c568a20611d44e70a93d6d51b33eee62"
+  },
+  "body": null,
+  "expect": 401,
+  "note": "A correct signature over a timestamp a thousand seconds before the receiver's clock. The window is three hundred seconds either way, so this is refused."
+}
