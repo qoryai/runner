@@ -308,7 +308,7 @@ func data(e map[string]any) map[string]any { return e["data"].(map[string]any) }
 func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
 	defer origin.Close()
-	pol := &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1", "api.anthropic.com"}}}
+	pol := &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1", "api.anthropic.com"}, Deny: []string{"tracker.example"}}}
 	sp := spec(t, pol, "FAKE_ALLOWED_URL="+origin.URL+"/allowed", "FAKE_DENIED_URL="+strings.Replace(origin.URL, "127.0.0.1", "localhost", 1)+"/denied", "FAKE_EXIT=3")
 	sp.Declared = []string{"127.0.0.1", "registry.npmjs.org"}
 	res, err := runWithSettingsEnv(t, sp)
@@ -323,7 +323,7 @@ func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 		t.Fatalf("event order: %v", types(evs))
 	}
 	applied := data(evs[1])
-	if applied["mode"] != "enforce" || applied["source"] != "config" || fmt.Sprint(applied["allow"]) != "[127.0.0.1 api.anthropic.com]" || fmt.Sprint(applied["harness_hosts"]) != "[127.0.0.1 registry.npmjs.org]" || applied["digest"] == nil || applied["declared"] != nil || applied["url"] != nil {
+	if applied["mode"] != "enforce" || applied["source"] != "config" || fmt.Sprint(applied["allow"]) != "[127.0.0.1 api.anthropic.com]" || fmt.Sprint(applied["harness_hosts"]) != "[127.0.0.1 registry.npmjs.org]" || fmt.Sprint(applied["deny"]) != "[tracker.example]" || applied["digest"] == nil || applied["declared"] != nil || applied["url"] != nil {
 		t.Errorf("policy_applied %v", applied)
 	}
 	egress := ofType(evs, "ai.qory.run.egress")
@@ -1140,5 +1140,46 @@ func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(res.Dir, "settings.json")); !os.IsNotExist(err) {
 		t.Error("something was prepared for a runtime the runner does not know")
+	}
+}
+
+// TestPolicyUnderACeilingKeepsBothDenyLists pins that a deny holds whatever the modes:
+// the ceiling's deny list is kept under observe, where the ceiling forbids nothing
+// else; both lists meet, the ceiling's first, under enforce and when an observing
+// policy takes the ceiling; and a policy with no deny under no deny carries none.
+func TestPolicyUnderACeilingKeepsBothDenyLists(t *testing.T) {
+	mk := func(mode string, allow, deny []string) *session.Policy {
+		return &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: mode, Allow: allow, Deny: deny}}
+	}
+	join := func(p *session.Policy) string {
+		return p.Egress.Mode + " " + strings.Join(p.Egress.Allow, ",") + " " + strings.Join(p.Egress.Deny, ",")
+	}
+	for _, c := range []struct {
+		name         string
+		run, ceiling *session.Policy
+		want         string
+	}{
+		{"observe ceiling with a deny", mk("observe", nil, []string{"tracker.example"}), mk("observe", nil, []string{"*.ads.example"}), "observe  *.ads.example,tracker.example"},
+		{"observe ceiling without a deny", mk("enforce", []string{"api.example"}, []string{"tracker.example"}), mk("observe", nil, nil), "enforce api.example tracker.example"},
+		{"enforce ceiling, enforce run", mk("enforce", []string{"api.example"}, []string{"tracker.example"}), mk("enforce", []string{"*.example"}, []string{"*.ads.example", "tracker.example"}), "enforce api.example *.ads.example,tracker.example"},
+		{"enforce ceiling, observe run", mk("observe", nil, []string{"tracker.example"}), mk("enforce", []string{"*.example"}, nil), "enforce *.example tracker.example"},
+		{"no deny anywhere", mk("enforce", []string{"api.example"}, nil), mk("enforce", []string{"*.example"}, nil), "enforce api.example "},
+	} {
+		if got := join(c.run.Under(c.ceiling)); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	if got := mk("enforce", []string{"api.example"}, nil).Under(mk("enforce", []string{"*.example"}, nil)); got.Egress.Deny != nil {
+		t.Errorf("a deny list from nowhere: %v", got.Egress.Deny)
+	}
+	p, err := session.ReadPolicy("run.yaml", []byte("version: 1\negress:\n  mode: observe\n  deny: [tracker.example]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(p.Egress.Deny, " ") != "tracker.example" {
+		t.Errorf("deny read as %v", p.Egress.Deny)
+	}
+	if _, err := session.ReadPolicy("run.yaml", []byte("version: 1\negress:\n  mode: observe\n  deny: [\"tracker.example:443\"]\n")); err == nil {
+		t.Error("a deny entry with a port was read")
 	}
 }

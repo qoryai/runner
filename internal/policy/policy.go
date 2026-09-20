@@ -3,12 +3,13 @@
 // The policy is the document of contracts/runner/v1/policy.schema.json, given to the
 // runner once by its caller and pinned for the run. [Read] reads it from bytes: a
 // document the schema refuses is a [*Error] and no run; [None] is the absent policy,
-// mode observe with nothing denied. The schema is the reader: a refused document
+// mode observe with no list to deny by. The schema is the reader: a refused document
 // carries the schema's message.
 //
-// A policy narrows only. [Match] says which entry of an allow list covers a host, and
-// [Covers] whether one entry stands above another, which is how a policy is put under
-// a ceiling. Nothing here grants: the widest a policy can be is the absent one.
+// A policy narrows only. [Match] says which entry of a list, the allow list's or the
+// deny list's, covers a host, and [Covers] whether one entry stands above another,
+// which is how a policy is put under a ceiling. Nothing here grants: the widest a
+// policy can be is the absent one.
 package policy
 
 import (
@@ -25,8 +26,9 @@ import (
 // Mode is the egress mode of a policy.
 type Mode string
 
-// The two modes. Observe records every connection and denies none; Enforce denies a
-// connection to a host outside the allow list and records the denial.
+// The two modes. Observe records every connection and denies only what the deny list
+// names; Enforce denies a connection to a host outside the allow list as well, and
+// records the denial. The deny list is decided first in either mode.
 const (
 	Observe Mode = "observe"
 	Enforce Mode = "enforce"
@@ -41,8 +43,12 @@ type Policy struct {
 
 // Egress is the policy's egress section.
 type Egress struct {
-	Mode  Mode                `json:"mode"`
-	Allow []string            `json:"allow"`
+	Mode  Mode     `json:"mode"`
+	Allow []string `json:"allow"`
+	// Deny are the hosts the session may not reach, in Allow's grammar, in either
+	// mode: a host an entry covers is denied before Allow and before Mode are
+	// consulted, with the entry as its rule.
+	Deny  []string            `json:"deny,omitempty"`
 	Paths map[string][]string `json:"paths,omitempty"`
 }
 
@@ -81,7 +87,7 @@ func (e *Error) Error() string { return "policy " + e.Name + ": " + e.Err.Error(
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
 
-// None is the absent policy: observe everything, deny nothing, source none.
+// None is the absent policy: observe everything with no list to deny by, source none.
 func None() *Loaded {
 	return &Loaded{Policy: Policy{Version: 1, Egress: Egress{Mode: Observe}}, Source: "none"}
 }
@@ -147,14 +153,14 @@ func Covers(entry, other string) bool {
 	return strings.HasSuffix(name, "."+suffix)
 }
 
-// Match returns the first entry of allow that matches host, and whether one did. A
-// host is compared lower-case and without a trailing dot; an IP literal matches only
-// an identical entry; a pattern "*.x" matches any host with at least one label before
-// ".x" and never "x" itself.
-func Match(allow []string, host string) (string, bool) {
+// Match returns the first entry of a list, the allow list or the deny list, that
+// matches host, and whether one did. A host is compared lower-case and without a
+// trailing dot; an IP literal matches only an identical entry; a pattern "*.x"
+// matches any host with at least one label before ".x" and never "x" itself.
+func Match(entries []string, host string) (string, bool) {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	ip := net.ParseIP(host) != nil
-	for _, entry := range allow {
+	for _, entry := range entries {
 		e := strings.ToLower(entry)
 		if e == host {
 			return entry, true

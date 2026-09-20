@@ -347,7 +347,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		bind = enclosure.ProxyAddr()
 	}
 
-	px, err := proxy.Listen(bind, pol.Policy.Egress.Mode, allow, func(d proxy.Decision) { write(event.RunEgress, egress(d)) })
+	px, err := proxy.Listen(bind, pol.Policy.Egress.Mode, allow, pol.Policy.Egress.Deny, func(d proxy.Decision) { write(event.RunEgress, egress(d)) })
 	if err != nil {
 		sinks.Close(ctx)
 		return nil, err
@@ -453,11 +453,14 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// applied is the policy_applied event of a policy: the one pinned at start, and
 	// each one a reload puts in its place.
 	applied := func(pol *policy.Loaded, held *credential.Held) map[string]any {
-		allow := pol.Policy.Egress.Allow
+		allow, deny := pol.Policy.Egress.Allow, pol.Policy.Egress.Deny
 		if allow == nil {
 			allow = []string{}
 		}
-		a := map[string]any{"mode": string(pol.Policy.Egress.Mode), "allow": allow, "source": pol.Source}
+		if deny == nil {
+			deny = []string{}
+		}
+		a := map[string]any{"mode": string(pol.Policy.Egress.Mode), "allow": allow, "deny": deny, "source": pol.Source}
 		if pol.Source != "none" {
 			a["digest"] = pol.Digest
 		}
@@ -512,7 +515,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 				return err
 			}
 			mu.Lock()
-			refused := px.SetPolicy(in.Policy.Egress.Mode, in.Policy.Egress.Allow, in.Policy.Egress.Paths, proxyUses(fresh))
+			refused := px.SetPolicy(in.Policy.Egress.Mode, in.Policy.Egress.Allow, in.Policy.Egress.Deny, in.Policy.Egress.Paths, proxyUses(fresh))
 			old := held
 			held = fresh
 			posts.SetRunDigest(in.RunConfiguration)

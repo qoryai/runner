@@ -41,8 +41,8 @@ The runner's duties, in the order that matters when they conflict:
 1. **Policy.** The runner reads one policy document, pinned for the run, that can only
    narrow what the binary allows: the egress mode, the allow list, the deny list, the
    paths of a host, and which of the machine's credentials the run may use. A policy
-   that cannot be read means no run. No policy means observe everything and deny
-   nothing. Nothing in a policy grants; a stale or failed policy degrades toward more
+   that cannot be read means no run. No policy means observe everything, with no
+   list to deny by. Nothing in a policy grants; a stale or failed policy degrades toward more
    restrictive, never toward more permissive.
 2. **Egress.** The runner owns an HTTP proxy, on loopback or, behind a wall, on the one
    address the enclosure reaches (§The wall), and starts the session behind it.

@@ -35,8 +35,9 @@ start unless the server answers, and `qory run --local` runs with the files alon
 ```yaml
 apiVersion: qory.dev/v1alpha1
 egress:
-  mode: enforce                         # or observe: record everything, deny nothing
+  mode: enforce                         # or observe: record everything, deny only what deny names
   allow: [api.anthropic.com, "*.github.com"]
+  deny: [gist.github.com]               # denied in either mode, whatever allow says
 server:                                 # optional
   url: https://qory.example
   access_key: ak_f1xt0re000000000
@@ -224,7 +225,7 @@ cannot set what it runs under. With it, a bare `qory run` is walled:
 ```yaml
 apiVersion: qory.dev/v1alpha1
 egress:                         # what the agent may reach; without it, everything, recorded
-  mode: enforce                 # or observe: record everything, deny nothing
+  mode: enforce                 # or observe: record everything, deny only what deny names
   allow: [api.anthropic.com, github.com, "*.githubusercontent.com"]
 server:                         # how the node reports; without it, files only
   url: https://control-plane.example.com

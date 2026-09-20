@@ -92,6 +92,19 @@ release may change what an existing document does, and says so under Upgrading.
   the container's terminal: the docker command runs on the runner's pseudo-terminal,
   takes the resize signal and resizes the container's. The schema
   `events/run.resized.schema.json`; the recorded run under `fixtures/run/` carries both.
+- `egress.deny` in the policy: hosts the session may not reach, in `allow`'s grammar,
+  in either mode. The proxy decides it first, after the wall's guard and before the
+  mode and the allow list: a host an entry covers is refused with a `403`, not
+  dialled, recorded as denied with the entry as its rule, under `observe` as under
+  `enforce`, whatever `allow` says of it; `allow: ["*.example"]` with
+  `deny: ["tracker.example"]` denies `tracker.example` and reaches `api.example`.
+  Observe records every connection and denies only what `deny` names. A reload
+  carries the list and closes an open tunnel to a host the new one names.
+  `ai.qory.run.policy_applied` carries `deny` beside `allow`, the policy's entries.
+  `session.PolicyEgress.Deny`; `Under` keeps the deny lists of a policy and its
+  ceiling both, whatever their modes, since a deny narrows. Fixtures
+  `fixtures/policy/observe-deny.yaml` and `fixtures/run-configuration/observe-deny.json`.
+  Revision 1 of the contract is amended in place; it had not shipped.
 
 ### Changed
 

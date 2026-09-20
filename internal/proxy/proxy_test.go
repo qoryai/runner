@@ -65,7 +65,7 @@ func TestEnforceAllowsListedHostsAndDeniesTheRest(t *testing.T) {
 	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "secure "+r.URL.Path) }))
 	defer secure.Close()
 	var o observer
-	p, err := proxy.Listen("", policy.Enforce, []string{"127.0.0.1"}, o.observe)
+	p, err := proxy.Listen("", policy.Enforce, []string{"127.0.0.1"}, nil, o.observe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestObserveAllowsEverythingAndStillRecords(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
 	defer origin.Close()
 	var o observer
-	p, err := proxy.Listen("", policy.Observe, nil, o.observe)
+	p, err := proxy.Listen("", policy.Observe, nil, nil, o.observe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestSetPolicyDecidesNewConnectionsAndClosesDeniedTunnels(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
 	defer origin.Close()
 	var o observer
-	p, err := proxy.Listen("", policy.Observe, nil, o.observe)
+	p, err := proxy.Listen("", policy.Observe, nil, nil, o.observe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestSetPolicyDecidesNewConnectionsAndClosesDeniedTunnels(t *testing.T) {
 	stays, goes := open("127.0.0.1"), open("localhost")
 	defer stays.Close()
 	defer goes.Close()
-	refused := p.SetPolicy(policy.Enforce, []string{"127.0.0.1"}, nil, nil)
+	refused := p.SetPolicy(policy.Enforce, []string{"127.0.0.1"}, nil, nil, nil)
 	if p.Terminates() || len(refused) != 1 || refused[0].Host != "localhost" || refused[0].Allowed || refused[0].Outcome != proxy.Refused || refused[0].Mode != policy.Enforce {
 		t.Fatalf("SetPolicy returned %+v", refused)
 	}
@@ -210,7 +210,7 @@ func TestSetPolicyDecidesNewConnectionsAndClosesDeniedTunnels(t *testing.T) {
 
 // TestEnvNamesTheProxyInBothCases pins the six variables and the loopback exemption.
 func TestEnvNamesTheProxyInBothCases(t *testing.T) {
-	p, err := proxy.Listen("", policy.Observe, nil, func(proxy.Decision) {})
+	p, err := proxy.Listen("", policy.Observe, nil, nil, func(proxy.Decision) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestEnvNamesTheProxyInBothCases(t *testing.T) {
 // is what a program sends to an origin and not to a proxy, gets a 400 and no decision.
 func TestNonProxyRequestIsRefused(t *testing.T) {
 	var o observer
-	p, err := proxy.Listen("", policy.Observe, nil, o.observe)
+	p, err := proxy.Listen("", policy.Observe, nil, nil, o.observe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestGuardRefusesThisMachineAndLinkLocal(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
 	defer origin.Close()
 	var o observer
-	p, err := proxy.Listen("", policy.Observe, nil, o.observe)
+	p, err := proxy.Listen("", policy.Observe, nil, nil, o.observe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 		var o observer
 		// Only a host the policy names itself opens this machine, not one under a
 		// suffix it lists.
-		p, err := proxy.Listen("", mode, []string{"127.0.0.1", "app.localtest.me", "169.254.169.254"}, o.observe)
+		p, err := proxy.Listen("", mode, []string{"127.0.0.1", "app.localtest.me", "169.254.169.254"}, nil, o.observe)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -335,7 +335,7 @@ func TestGuardOpensThisMachineToAHostThePolicyNames(t *testing.T) {
 // required, a connection that opens with the preamble is served as ever, and one that
 // does not is closed unanswered and told of.
 func TestRequireServesOnlyConnectionsThatOpenWithTheToken(t *testing.T) {
-	p, err := proxy.Listen("", policy.Observe, nil, func(proxy.Decision) {})
+	p, err := proxy.Listen("", policy.Observe, nil, nil, func(proxy.Decision) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
 
 	var decisions []proxy.Decision
-	p, err := proxy.Listen("", policy.Enforce, []string{host}, func(d proxy.Decision) { mu.Lock(); decisions = append(decisions, d); mu.Unlock() })
+	p, err := proxy.Listen("", policy.Enforce, []string{host}, nil, func(d proxy.Decision) { mu.Lock(); decisions = append(decisions, d); mu.Unlock() })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +494,7 @@ func TestSetPolicySwapsTheCredentialsWithThePolicy(t *testing.T) {
 	}))
 	defer origin.Close()
 	host, port, _ := net.SplitHostPort(origin.Listener.Addr().String())
-	p, err := proxy.Listen("", policy.Enforce, []string{host}, func(proxy.Decision) {})
+	p, err := proxy.Listen("", policy.Enforce, []string{host}, nil, func(proxy.Decision) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,14 +526,100 @@ func TestSetPolicySwapsTheCredentialsWithThePolicy(t *testing.T) {
 		resp.Body.Close()
 	}
 	get()
-	p.SetPolicy(policy.Enforce, []string{host}, nil, cred("second", "token-two"))
+	p.SetPolicy(policy.Enforce, []string{host}, nil, nil, cred("second", "token-two"))
 	get()
 	// A path rule keeps the host terminated once no credential is for it.
-	p.SetPolicy(policy.Enforce, []string{host}, map[string][]string{host: {"/*"}}, nil)
+	p.SetPolicy(policy.Enforce, []string{host}, nil, map[string][]string{host: {"/*"}}, nil)
 	get()
 	mu.Lock()
 	defer mu.Unlock()
 	if fmt.Sprint(seen) != "[Bearer token-one Bearer token-two ]" {
 		t.Errorf("the origin saw %q", seen)
+	}
+}
+
+// TestDenyIsDecidedFirstInEitherMode pins the deny list: a host it covers is refused
+// under observe as under enforce, before the dial, with the first matching entry as
+// the rule; it beats an allow entry of any shape, a host both lists name included; a
+// host it does not cover is decided by the mode and the allow list as before; a reload
+// carries it, closing an open tunnel to a host the new list names; and the guard of a
+// walled proxy decides before it.
+func TestDenyIsDecidedFirstInEitherMode(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	var o observer
+	p, err := proxy.Listen("", policy.Observe, nil, nil, o.observe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	port := origin.URL[strings.LastIndex(origin.URL, ":"):]
+	for _, c := range []struct {
+		name    string
+		mode    policy.Mode
+		allow   []string
+		deny    []string
+		url     string
+		status  int
+		allowed bool
+		rule    string
+	}{
+		{"observe denies what deny names", policy.Observe, nil, []string{"localhost"}, "http://localhost" + port, 403, false, "localhost"},
+		{"observe lets the rest through", policy.Observe, nil, []string{"localhost"}, origin.URL, 200, true, ""},
+		{"enforce denies what deny names before allow", policy.Enforce, []string{"localhost"}, []string{"localhost"}, "http://localhost" + port, 403, false, "localhost"},
+		{"enforce reaches an allowed host deny does not name", policy.Enforce, []string{"127.0.0.1"}, []string{"tracker.example"}, origin.URL, 200, true, "127.0.0.1"},
+		{"deny beats a *. allow above it", policy.Observe, []string{"*.example"}, []string{"tracker.example"}, "http://tracker.example/", 403, false, "tracker.example"},
+		{"an allow of the same shape does not save it", policy.Enforce, []string{"tracker.example"}, []string{"*.example"}, "http://tracker.example/", 403, false, "*.example"},
+		{"the first deny entry is the rule", policy.Observe, nil, []string{"*.example", "tracker.example"}, "http://tracker.example/", 403, false, "*.example"},
+		{"deny is compared lower-case", policy.Observe, nil, []string{"tracker.example"}, "http://Tracker.Example/", 403, false, "tracker.example"},
+	} {
+		p.SetPolicy(c.mode, c.allow, c.deny, nil, nil)
+		resp, err := through(t, p, nil).Get(c.url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		d := o.last(t)
+		if resp.StatusCode != c.status || d.Allowed != c.allowed || d.Rule != c.rule || d.Mode != c.mode || (!c.allowed && d.Outcome != proxy.Refused) {
+			t.Errorf("%s: status %d, decision %+v", c.name, resp.StatusCode, d)
+		}
+		if c.status == 403 {
+			if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), "denied by policy (mode "+string(c.mode)+")") && len(body) > 0 {
+				t.Errorf("%s: body %q", c.name, body)
+			}
+		}
+	}
+	// A reload carries deny: a tunnel open under observe to a host the new deny list
+	// names is closed and returned refused with the entry as its rule.
+	p.SetPolicy(policy.Observe, nil, nil, nil, nil)
+	c, err := net.Dial("tcp", p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprintf(c, "CONNECT localhost%s HTTP/1.1\r\nHost: localhost%s\r\n\r\n", port, port)
+	line := make([]byte, len("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	if _, err := io.ReadFull(c, line); err != nil || !strings.HasPrefix(string(line), "HTTP/1.1 200") {
+		t.Fatalf("CONNECT localhost: %q %v", line, err)
+	}
+	refused := p.SetPolicy(policy.Observe, nil, []string{"localhost"}, nil, nil)
+	if len(refused) != 1 || refused[0].Host != "localhost" || refused[0].Allowed || refused[0].Rule != "localhost" || refused[0].Outcome != proxy.Refused || refused[0].Mode != policy.Observe {
+		t.Fatalf("SetPolicy returned %+v", refused)
+	}
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Error("the tunnel to the denied host is still open")
+	}
+	// The guard decides before deny: this machine by address is the wall's refusal,
+	// whatever deny says of it.
+	p.Guard(nil)
+	p.SetPolicy(policy.Observe, nil, []string{"127.0.0.1"}, nil, nil)
+	resp, err := through(t, p, nil).Get(origin.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if d := o.last(t); resp.StatusCode != 403 || d.Rule != proxy.GuardRule || d.Allowed {
+		t.Errorf("guarded: status %d, decision %+v", resp.StatusCode, d)
 	}
 }
