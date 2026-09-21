@@ -79,4 +79,57 @@ func TestABareRuntimeIsRunAndNotRead(t *testing.T) {
 	if rt.Name() != "codex" || rt.Version() != "" || rt.ReadsOutput() || rt.Stop() != (runtimes.Stop{}) {
 		t.Errorf("%+v", rt)
 	}
+	if rt.Headless([]string{"-p", "hi"}) {
+		t.Error("a bare runtime knows nothing of its arguments, so none is headless")
+	}
+}
+
+// TestTheDescriptorSaysWhichArgumentsMeanHeadless pins the matching rule: a short
+// argument is the whole token, a long one the token or its --name=value form, tokens
+// are compared one by one, and no flag grammar is parsed. A descriptor without the
+// section leaves the decision to the caller.
+func TestTheDescriptorSaysWhichArgumentsMeanHeadless(t *testing.T) {
+	doc := strings.Replace(other, "stop: {signal: SIGINT, grace: 45s}\n", "headless: {args: [\"-p\", \"--print\"]}\n", 1)
+	rt, err := runtimes.Described("other-agent.yaml", []byte(doc), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimetest.Conforms(t, rt)
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{
+		{nil, false},
+		{[]string{}, false},
+		{[]string{"-p"}, true},
+		{[]string{"-p", "Reply pong"}, true},
+		{[]string{"--model", "opus", "-p", "hi"}, true},
+		{[]string{"--print"}, true},
+		{[]string{"--print=x"}, true},
+		{[]string{"--print="}, true},
+		{[]string{"-print"}, false},
+		{[]string{"--printer"}, false},
+		{[]string{"-px"}, false},
+		{[]string{"-p="}, false},
+		{[]string{"Reply pong"}, false},
+		{[]string{"--", "-p"}, true},
+		// A value that spells a named argument counts: tokens are compared, not parsed.
+		{[]string{"--model", "-p"}, true},
+	} {
+		if got := rt.Headless(c.args); got != c.want {
+			t.Errorf("Headless(%q) = %v", c.args, got)
+		}
+	}
+	without, err := runtimes.Described("other-agent.yaml", []byte(other), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without.Headless([]string{"-p"}) {
+		t.Error("a descriptor without the section infers nothing")
+	}
+	for _, bad := range []string{"headless: {}", "headless: {args: []}", "headless: {args: [\"-p\", \"-p\"]}", "headless: {args: [\"\"]}", "headless: {args: [\"-p\"], env: [X]}"} {
+		if _, err := runtimes.Described("other-agent.yaml", []byte(strings.Replace(other, "stop: {signal: SIGINT, grace: 45s}", bad, 1)), nil); err == nil {
+			t.Errorf("%s was read", bad)
+		}
+	}
 }

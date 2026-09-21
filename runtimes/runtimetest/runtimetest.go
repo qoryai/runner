@@ -44,6 +44,9 @@ func Conforms(t *testing.T, rt runtimes.Runtime) {
 	if typ, _, ok := rt.Map(runtimes.Record{Source: runtimes.SourceHooks, Record: map[string]any{}}); ok {
 		t.Errorf("an empty record became %s; a record that says nothing is no event", typ)
 	}
+	if rt.Headless(nil) {
+		t.Error("no arguments at all are headless; a runtime started with none has whatever interface it has")
+	}
 
 	launch := runtimes.Launch{Command: "/usr/bin/program", Args: []string{"--flag", "value"}}
 	dir := t.TempDir()

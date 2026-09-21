@@ -677,12 +677,14 @@ anyone else follows this section, replays those files, and may read that code.
 The runner starts a program, records it and stops it, and knows no program. What is
 particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
 enclosure is behind `wall.Wall`, and Claude Code is one implementation of it among the
-ones there may be. A runtime answers five things: its name and the version of the
+ones there may be. A runtime answers six things: its name and the version of the
 program it was written against, reported in `ai.qory.run.started`; how a launch is
 prepared so the program reports to the runner, which may change the arguments, add
 variables and write into the run directory and nothing else; whether the program's
-standard output is records to read; what event, if any, one record is; and how the
-program is asked to leave, a signal and a grace.
+standard output is records to read; what event, if any, one record is; how the
+program is asked to leave, a signal and a grace; and whether the arguments it is
+started with mean it runs without an interface, so the session is on pipes whatever
+the caller has.
 
 There are three ways to a runtime, and a name resolves to the first that applies:
 

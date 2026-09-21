@@ -89,8 +89,9 @@ own implements the interface, and `runtimes/runtimetest` holds it to the same ch
 
 The spec's `Declared` is the egress the harness declared, reported in the record as
 `harness_hosts` and deciding nothing; nil means no declaration. `Interactive` runs the
-session on a pseudo-terminal, else on
-pipes, where the runtime's structured output is read. The command named in `Forwarder`
+session on a pseudo-terminal, unless an argument the runtime's descriptor names as
+headless is among `Args`, `-p` for Claude Code; else it runs on pipes, where the
+runtime's structured output is read. The command named in `Forwarder`
 is installed as the runtime's hook and must call `session.Forward(ctx, os.Stdin)`, which
 hands the hook's input to the run over a socket named in the environment. The whole
 sequence, every event type and every file is in the

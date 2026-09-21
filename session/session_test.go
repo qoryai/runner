@@ -741,6 +741,53 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 	}
 }
 
+// TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas pins the inference: a caller at
+// a terminal that starts the runtime with an argument its descriptor names as headless,
+// -p for Claude Code, gets a session on pipes, recorded as not interactive and with its
+// structured output read, exactly as if it had said headless. A runtime that names no
+// such argument keeps the caller's pseudo-terminal, -p or not.
+func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
+	t.Run("the descriptor names it", func(t *testing.T) {
+		sp := spec(t, nil)
+		sp.Interactive = true
+		sp.Args = append(sp.Args, "-p", "Reply pong")
+		res, err := session.Run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evs := events(t, res)
+		started := data(evs[0])
+		if started["interactive"] != false || started["terminal"] != nil {
+			t.Errorf("run.started %v; want not interactive and no terminal size", started)
+		}
+		if l := ofType(evs, "ai.qory.run.log"); len(l) == 0 || data(l[0])["stream"] == "terminal" {
+			t.Errorf("log %v; want the streams of pipes", l)
+		}
+		if r := ofType(evs, "ai.qory.session.result"); len(r) != 1 || data(r[0])["result"] != "done" {
+			t.Errorf("session.result %v; want the output read", r)
+		}
+	})
+	t.Run("the runtime names none", func(t *testing.T) {
+		sp := spec(t, nil)
+		sp.Forwarder = nil
+		sp.Interactive = true
+		sp.Runtime = runtimes.Bare("other-agent")
+		sp.Command = "sh"
+		sp.Args = []string{"-c", "echo hello", "sh", "-p"}
+		res, err := session.Run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evs := events(t, res)
+		if started := data(evs[0]); started["interactive"] != true || started["terminal"] == nil {
+			t.Errorf("run.started %v; want the caller's terminal kept", started)
+		}
+		if l := ofType(evs, "ai.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
+			t.Errorf("log %v", l)
+		}
+	})
+}
+
 // TestInteractiveRunFollowsTheTerminalSize pins the size in the record: the
 // pseudo-terminal starts at the size of the terminal stdin is, reported in run.started,
 // and when that terminal is resized the pseudo-terminal follows and run.resized says so

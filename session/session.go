@@ -41,9 +41,11 @@ type Spec struct {
 	Args    []string
 	Env     []string
 	Dir     string
-	// Interactive runs the session on a pseudo-terminal attached to Stdin and Stdout;
-	// otherwise it runs on pipes with Stdin as its input and its output copied to
-	// Stdout and Stderr. A nil stream is the process's own.
+	// Interactive says the caller has a terminal: the session runs on a pseudo-terminal
+	// attached to Stdin and Stdout, unless Args holds an argument the Runtime names as
+	// headless, -p for Claude Code, in which case it runs on pipes as if the caller had
+	// said so. Otherwise it runs on pipes with Stdin as its input and its output copied
+	// to Stdout and Stderr. A nil stream is the process's own.
 	Interactive bool
 	Stdin       io.Reader
 	Stdout      io.Writer
@@ -221,6 +223,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if rt == nil {
 		rt = runtimes.Bare(filepath.Base(spec.Command))
 	}
+	// Interactive is what the caller has; interactive is what the session is. An
+	// argument the runtime names as headless means pipes whatever the caller has.
+	interactive := spec.Interactive && !rt.Headless(spec.Args)
 	leave := rt.Stop()
 	if err := CheckStopSignal(leave.Signal); err != nil {
 		return nil, fmt.Errorf("runtime %s: %w", rt.Name(), err)
@@ -401,7 +406,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// The run directory goes in read-only, over whatever mount holds it: the settings
 	// are read from it, and the record in it is not the agent's to rewrite.
 	mounts := append(append([]wall.Mount(nil), spec.Mounts...), wall.Mount{Path: dir, ReadOnly: true})
-	if prepared, err = rt.Prepare(runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: spec.Interactive}); err != nil {
+	if prepared, err = rt.Prepare(runtimes.Attach{Launch: prepared, RunDir: dir, Forwarder: spec.Forwarder, Interactive: interactive}); err != nil {
 		sinks.Close(ctx)
 		return nil, fmt.Errorf("runtime %s: %w", rt.Name(), err)
 	}
@@ -415,7 +420,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	if enclosure != nil {
 		launch, err = enclosure.Wrap(ctx, wall.Launch{
-			Command: command, Args: args, Dir: spec.Dir, Interactive: spec.Interactive,
+			Command: command, Args: args, Dir: spec.Dir, Interactive: interactive,
 			Env:   environment(spec.Env, prepared.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders)),
 			CA:    authority,
 			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits, ProxyToken: token,
@@ -429,7 +434,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	start := time.Now()
 	started := map[string]any{
 		"runtime": rt.Name(), "command": command, "args": args,
-		"dir": spec.Dir, "interactive": spec.Interactive, "runner_version": spec.RunnerVersion, "host": hostname(),
+		"dir": spec.Dir, "interactive": interactive, "runner_version": spec.RunnerVersion, "host": hostname(),
 	}
 	if v := rt.Version(); v != "" {
 		started["runtime_version"] = v
@@ -438,7 +443,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// a full-screen program over each other: the size it starts with here, each change
 	// as run.resized.
 	var cols, rows int
-	if spec.Interactive {
+	if interactive {
 		cols, rows = terminalSize(spec.Stdin)
 		started["terminal"] = map[string]any{"cols": cols, "rows": rows}
 	}
@@ -546,7 +551,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		limited, cancelLimit = context.WithTimeoutCause(ctx, spec.Timeout, errTimeout)
 	}
 	var exit exitStatus
-	if spec.Interactive {
+	if interactive {
 		exit, err = proc.runPTY(limited)
 	} else {
 		exit, err = proc.runPipes(limited)

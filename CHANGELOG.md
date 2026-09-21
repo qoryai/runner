@@ -34,6 +34,8 @@ release may change what an existing document does, and says so under Upgrading.
 - A name that resolves to the runner's own machine or to the link-local range, through
   a guarded proxy, is now answered `403` and recorded as denied with the rule
   `wall:own-address`; it was a `502` recorded as allowed.
+- `runtimes.Runtime` gains `Headless(args []string) bool`, so a `Runtime` of one's own
+  adds the method; returning false keeps what the caller asked for.
 - A receiver accepts one more type, `ai.qory.run.resized`, with `cols` and `rows`, and
   `terminal`, an object of `cols` and `rows`, on `ai.qory.run.started` when
   `interactive` is true. A receiver that replays the terminal takes the size from
@@ -105,6 +107,19 @@ release may change what an existing document does, and says so under Upgrading.
   ceiling both, whatever their modes, since a deny narrows. Fixtures
   `fixtures/policy/observe-deny.yaml` and `fixtures/run-configuration/observe-deny.json`.
   Revision 1 of the contract is amended in place; it had not shipped.
+- `headless` in the descriptor: `args`, the arguments that mean the runtime runs
+  without an interface. When one of them is among the arguments the runtime is started
+  with, the session runs on pipes even at a terminal, exactly as if the caller had
+  asked for that: `ai.qory.run.started` carries `interactive: false` and no `terminal`,
+  and the descriptor's `output` source is read. A short argument matches the whole
+  token, a long one the token or its `--name=value` form, and nothing else is
+  inferred; absent, the caller alone decides. Runtimes differ in how they say "no
+  interface", so the descriptor defines the inference and not the command. The Claude
+  Code descriptor names `-p` and `--print`, so `claude -p "…"` at a terminal is a
+  headless session with no flag to say so. `session.Spec.Interactive` keeps its
+  meaning, what the caller has; `runtimes.Runtime.Headless` is what the runtime says
+  of the arguments, false from a bare runtime. The invalid fixture
+  `descriptor-headless-empty.yaml`.
 
 ### Changed
 
