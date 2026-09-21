@@ -32,6 +32,10 @@ sources:
       - StopFailure
       - Notification
       - SessionEnd
+# The print flag is the headless mode: a session started with it runs on pipes, whoever
+# started it, and the result line is read from its standard output.
+headless:
+  args: ["-p", "--print"]
 rules:
   - source: hooks
     match: {hook_event_name: SessionStart}

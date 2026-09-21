@@ -166,7 +166,8 @@ One run, on a developer machine, with a server configured:
    `settings.json` in the run directory and named in its place. What is prepared goes
    into the run directory; the composed home is not modified.
 7. It emits `ai.qory.run.started` and `ai.qory.run.policy_applied`, then starts the
-   program: on a pseudo-terminal when interactive, on pipes otherwise.
+   program: on a pseudo-terminal when the caller is interactive and no argument the
+   descriptor names as headless is among the runtime's, on pipes otherwise.
 8. While the program runs: every chunk of output is one `ai.qory.run.log`; on a
    pseudo-terminal every resize is one `ai.qory.run.resized`; every connection through
    the proxy is one `ai.qory.run.egress`; every record the descriptor matches is one
@@ -702,7 +703,7 @@ events and that each passes this contract's schema.
 
 ### The descriptor
 
-`descriptor.schema.json`. One YAML file per runtime. It has four parts.
+`descriptor.schema.json`. One YAML file per runtime. It has five parts.
 
 **Sources**: how the runner attaches. The terminal bytes always, with nothing to match
 in them and so no source. `output`: JSON lines on the runtime's standard output, when the
@@ -727,6 +728,16 @@ a bounded expression language, and before that a runner change.
 
 **Stop**, optional: `signal`, one of the six above, and `grace`, a duration. It is how a
 runtime that closes its session on one signal and drops it on another says which.
+
+**Headless**, optional: `args`, the arguments that mean the runtime runs without an
+interface. When one of them is among the arguments the runtime is started with, the
+session runs on pipes even at a terminal, exactly as if the caller had asked for that:
+the runtime is recorded as not interactive, and the descriptor's `output` source is read.
+A short argument matches the whole token (`-p`); a long one matches the token or its
+`--name=value` form (`--print`, `--print=…`). Nothing else is inferred: a runtime that
+takes its prompt on standard input, say, has no argument to name, and a caller says
+headless itself. Absent, the caller alone decides. Runtimes differ in how they say "no
+interface", which is why the descriptor defines the inference and not the command.
 
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
