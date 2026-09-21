@@ -4,6 +4,15 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [0.4.1] - 2026-09-21
+
+### Fixed
+
+- A policy reload that landed in the moment between a tunnel's `200 Connection
+  Established` and the proxy's own list of open tunnels missed that tunnel, and left it
+  open to a host the new policy denies. The tunnel is on the list before the client hears
+  200.
+
 ## [0.4.0] - 2026-09-21
 
 ### Upgrading
@@ -145,13 +154,6 @@ release may change what an existing document does, and says so under Upgrading.
   is what the handler reads before it has verified anything; it was 16 MiB.
 - The secret of a server document, and the key, never appear in an event or a log; the
   ping and the run's record hold the events URL and the run configuration URL only.
-
-### Fixed
-
-- A policy reload that landed in the moment between a tunnel's `200 Connection
-  Established` and the proxy's own list of open tunnels missed that tunnel, and left it
-  open to a host the new policy denies. The tunnel is on the list before the client hears
-  200.
 
 ### Removed
 
@@ -357,7 +359,8 @@ release may change what an existing document does, and says so under Upgrading.
   It names the policy's `egress.allow` grammar as the one definition of a declared host,
   which the harness contract copies.
 
-[Unreleased]: https://github.com/qoryai/runner/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/qoryai/runner/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/qoryai/runner/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/qoryai/runner/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/qoryai/runner/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/qoryai/runner/compare/v0.1.0...v0.2.0
