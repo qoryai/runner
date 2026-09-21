@@ -483,6 +483,10 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		// Tracked before the client hears 200: a reload that lands once the client has
+		// the line, and before the tunnel is on the list, would otherwise miss it.
+		t := p.track(d, true, client)
+		defer p.untrack(t)
 		if _, err := buf.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err == nil {
 			err = buf.Flush()
 		}
@@ -490,8 +494,6 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 			client.Close()
 			return
 		}
-		t := p.track(d, true, client)
-		defer p.untrack(t)
 		p.term.Load().serve(context.WithoutCancel(r.Context()), client, d, net.JoinHostPort(host, portText))
 		return
 	}
@@ -519,6 +521,9 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		upstream.Close()
 		return
 	}
+	// Tracked before the client hears 200, for the same reason as above.
+	t := p.track(d, false, client, upstream)
+	defer p.untrack(t)
 	if _, err := buf.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err == nil {
 		err = buf.Flush()
 	}
@@ -527,8 +532,6 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		upstream.Close()
 		return
 	}
-	t := p.track(d, false, client, upstream)
-	defer p.untrack(t)
 	relay(client, upstream, buf.Reader.Buffered(), buf.Reader)
 }
 
