@@ -146,6 +146,13 @@ release may change what an existing document does, and says so under Upgrading.
 - The secret of a server document, and the key, never appear in an event or a log; the
   ping and the run's record hold the events URL and the run configuration URL only.
 
+### Fixed
+
+- A policy reload that landed in the moment between a tunnel's `200 Connection
+  Established` and the proxy's own list of open tunnels missed that tunnel, and left it
+  open to a host the new policy denies. The tunnel is on the list before the client hears
+  200.
+
 ### Removed
 
 - `webhook.schema.json`, `fixtures/webhook/`, `session.Webhook`, `Spec.Webhook`,
