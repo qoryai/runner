@@ -4,7 +4,7 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
-## [0.4.0] - 2026-09-20
+## [0.4.0] - 2026-09-21
 
 ### Upgrading
 
