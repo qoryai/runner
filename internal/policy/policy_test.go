@@ -1,8 +1,11 @@
 package policy_test
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
+	"path"
+	"strings"
 	"testing"
 
 	"github.com/qoryai/runner/contracts"
@@ -32,7 +35,7 @@ func TestAbsentPolicyObservesEverything(t *testing.T) {
 // the mode it states, and that the digest is the document's, not the bytes': the same
 // policy as YAML and as JSON has one digest.
 func TestFixturesReadWithDigest(t *testing.T) {
-	for name, mode := range map[string]policy.Mode{"observe.yaml": policy.Observe, "enforce.yaml": policy.Enforce, "enforce-nothing.yaml": policy.Enforce} {
+	for name, mode := range map[string]policy.Mode{"observe.yaml": policy.Observe, "enforce.yaml": policy.Enforce, "enforce-nothing.yaml": policy.Enforce, "observe-deny.yaml": policy.Observe} {
 		l, err := policy.Read(name, fixture(t, "fixtures/policy/"+name))
 		if err != nil {
 			t.Fatal(err)
@@ -45,7 +48,7 @@ func TestFixturesReadWithDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	js, err := policy.Read("policy", []byte(`{"version":1,"egress":{"mode":"enforce","allow":["api.anthropic.com","*.github.com","github.com","registry.npmjs.org"]}}`))
+	js, err := policy.Read("policy", []byte(`{"version":1,"egress":{"mode":"enforce","allow":["api.anthropic.com","*.github.com","github.com","registry.npmjs.org"],"deny":["gist.github.com"]}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +60,7 @@ func TestFixturesReadWithDigest(t *testing.T) {
 // TestInvalidPolicyIsAnError pins the rule that a configured policy that does not
 // read means no run: a refused document is a *policy.Error naming the document.
 func TestInvalidPolicyIsAnError(t *testing.T) {
-	for _, name := range []string{"fixtures/invalid/policy-mode-log.yaml", "fixtures/invalid/policy-allow-widens.yaml"} {
+	for _, name := range []string{"fixtures/invalid/policy-mode-log.yaml", "fixtures/invalid/policy-allow-widens.yaml", "fixtures/invalid/policy-deny-port.yaml"} {
 		_, err := policy.Read(name, fixture(t, name))
 		var pe *policy.Error
 		if !errors.As(err, &pe) || pe.Name != name {
@@ -95,25 +98,102 @@ func TestMatchFollowsTheGrammar(t *testing.T) {
 	}
 }
 
-// TestNarrowKeepsOnlyWhatThePolicyCovers pins the intersection: declared entries the
-// policy covers survive in declared order, the rest are dropped, and with no
-// declaration the policy's own list is the effective one.
-func TestNarrowKeepsOnlyWhatThePolicyCovers(t *testing.T) {
-	l := &policy.Loaded{Policy: policy.Policy{Egress: policy.Egress{Mode: policy.Enforce, Allow: []string{"api.anthropic.com", "*.github.com"}}}}
-	got := l.Narrow([]string{"registry.npmjs.org", "api.github.com", "*.api.github.com", "github.com", "api.anthropic.com", "api.github.com", "*.github.com"})
-	want := []string{"api.github.com", "*.api.github.com", "api.anthropic.com", "*.github.com"}
-	if len(got) != len(want) {
-		t.Fatalf("Narrow = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("Narrow = %v, want %v", got, want)
+// TestCoversFollowsTheGrammar pins what stands above what: a name under the same name
+// or a suffix above it, a pattern under the same pattern or a suffix above it, and a
+// suffix never covers its own apex.
+func TestCoversFollowsTheGrammar(t *testing.T) {
+	for _, c := range []struct {
+		entry, other string
+		want         bool
+	}{
+		{"api.github.com", "api.github.com", true}, {"api.github.com", "API.github.com", true},
+		{"*.github.com", "api.github.com", true}, {"*.github.com", "*.api.github.com", true},
+		{"*.github.com", "github.com", false}, {"api.github.com", "*.github.com", false},
+		{"*.github.com", "*.github.com", true}, {"github.com", "api.github.com", false},
+	} {
+		if got := policy.Covers(c.entry, c.other); got != c.want {
+			t.Errorf("Covers(%q, %q) = %v", c.entry, c.other, got)
 		}
 	}
-	if got := l.Narrow(nil); len(got) != 2 {
-		t.Errorf("no declaration: %v", got)
+}
+
+// TestDenyReadsInAllowsGrammar pins the deny list: read when present, nil when absent,
+// refused by the schema when an entry is not in allow's grammar, and matched by Match
+// like the allow list, first entry first.
+func TestDenyReadsInAllowsGrammar(t *testing.T) {
+	l, err := policy.Read("observe-deny.yaml", fixture(t, "fixtures/policy/observe-deny.yaml"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := l.Narrow([]string{}); len(got) != 0 {
-		t.Errorf("empty declaration reaches nothing, got %v", got)
+	if l.Policy.Egress.Mode != policy.Observe || strings.Join(l.Policy.Egress.Deny, " ") != "tracker.example *.ads.example" || strings.Join(l.Policy.Egress.Allow, " ") != "api.example *.example" {
+		t.Errorf("observe-deny read as %+v", l.Policy.Egress)
+	}
+	if rule, ok := policy.Match(l.Policy.Egress.Deny, "banner.ads.example"); !ok || rule != "*.ads.example" {
+		t.Errorf("Match(deny, banner.ads.example) = %q, %v", rule, ok)
+	}
+	if rule, ok := policy.Match(l.Policy.Egress.Deny, "api.example"); ok {
+		t.Errorf("Match(deny, api.example) = %q, %v", rule, ok)
+	}
+	plain, err := policy.Read("observe.yaml", fixture(t, "fixtures/policy/observe.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Policy.Egress.Deny != nil {
+		t.Errorf("observe.yaml read with a deny list %v", plain.Policy.Egress.Deny)
+	}
+	for _, doc := range []string{
+		`{"version":1,"egress":{"mode":"observe","deny":["tracker.example:443"]}}`,
+		`{"version":1,"egress":{"mode":"enforce","deny":["https://tracker.example"]}}`,
+		`{"version":1,"egress":{"mode":"observe","deny":["Tracker.example"]}}`,
+		`{"version":1,"egress":{"mode":"observe","deny":["tracker.example","tracker.example"]}}`,
+	} {
+		if _, err := policy.Read("policy", []byte(doc)); err == nil {
+			t.Errorf("%s was accepted", doc)
+		}
+	}
+	if _, err := policy.Read("policy", []byte(`{"version":1,"egress":{"mode":"observe","deny":[]}}`)); err != nil {
+		t.Errorf("an empty deny list was refused: %v", err)
+	}
+}
+
+// TestEveryFixtureReadsAsAPolicy pins the round trip: every accepted policy fixture
+// reads, and the security_policy of every run configuration fixture reads the way a
+// reload reads it, the deny fixture with its deny list.
+func TestEveryFixtureReadsAsAPolicy(t *testing.T) {
+	docs, err := fs.ReadDir(contracts.FS, "fixtures/policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range docs {
+		if _, err := policy.Read(d.Name(), fixture(t, path.Join("fixtures/policy", d.Name()))); err != nil {
+			t.Errorf("%s: %v", d.Name(), err)
+		}
+	}
+	confs, err := fs.ReadDir(contracts.FS, "fixtures/run-configuration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	denies := 0
+	for _, d := range confs {
+		var rc struct {
+			SecurityPolicy json.RawMessage `json:"security_policy"`
+		}
+		if err := json.Unmarshal(fixture(t, path.Join("fixtures/run-configuration", d.Name())), &rc); err != nil {
+			t.Fatal(err)
+		}
+		l, err := policy.Read("run-configuration", rc.SecurityPolicy)
+		if err != nil {
+			t.Errorf("%s: %v", d.Name(), err)
+			continue
+		}
+		if d.Name() == "observe-deny.json" {
+			denies++
+			if l.Policy.Egress.Mode != policy.Observe || strings.Join(l.Policy.Egress.Deny, " ") != "tracker.example *.ads.example" {
+				t.Errorf("%s read as %+v", d.Name(), l.Policy.Egress)
+			}
+		}
+	}
+	if denies != 1 {
+		t.Error("fixtures/run-configuration has no observe-deny.json")
 	}
 }

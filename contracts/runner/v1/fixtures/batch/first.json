@@ -20,7 +20,11 @@
       ],
       "dir": "/home/dev/app",
       "interactive": true,
-      "runner_version": "0.1.0",
+      "terminal": {
+        "cols": 120,
+        "rows": 40
+      },
+      "runner_version": "0.4.0",
       "host": "dev-laptop"
     }
   },
@@ -42,7 +46,7 @@
       ],
       "source": "config",
       "digest": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-      "declared": [
+      "harness_hosts": [
         "api.anthropic.com",
         "github.com",
         "*.github.com",

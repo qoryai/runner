@@ -21,6 +21,12 @@ const Base = "https://qory.dev/contracts/runner/v1"
 // Version is the contract version the embedded directory holds.
 const Version = "v1"
 
+// Revision is the revision of the contract version this module implements: the
+// integer the runner sends as X-Qory-Contract-Version and as contract_version in the
+// ping. A runner that sends none is revision 0. A revision adds; a breaking change is
+// a new Version.
+const Revision = 1
+
 //go:embed all:runner
 var embedded embed.FS
 

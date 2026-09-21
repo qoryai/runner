@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/qoryai/runner/internal/event"
+	"github.com/qoryai/runner/internal/server"
 	"github.com/qoryai/runner/internal/sink"
-	"github.com/qoryai/runner/internal/webhook"
 	"github.com/qoryai/runner/wall"
 )
 
@@ -22,8 +22,9 @@ import (
 type ResendSpec struct {
 	// Dir is the run directory, the one [Result.Dir] named.
 	Dir string
-	// Webhook is where the events go: the receiver the run had, or another.
-	Webhook *Webhook
+	// Server is where the events go: the server the run had, or another. Its
+	// configuration document is fetched first, as for a run.
+	Server *Server
 	// Wall, when it is a [wall.Reaper], is asked to remove what the run's wall left.
 	Wall wall.Wall
 	// RunnerVersion is reported in the deliveries' user agent.
@@ -49,11 +50,11 @@ type ResendResult struct {
 // Resend completes and delivers the record of a run that is over, for a caller whose
 // runner died or whose receiver was away: the step a job runs last, whatever happened
 // before it. The events file is the record of truth and the run directory says which
-// of its events the receiver accepted, so Resend sends the rest, the ones the webhook's
-// filter wants, in order and in the run's own batches, until they are accepted or the
-// context ends. A record without run.exited gets one first, with the reason
+// of its events the server accepted, so Resend sends the rest, the ones the server's
+// configuration wants, in order and in the run's own batches, until they are accepted
+// or the context ends. A record without run.exited gets one first, with the reason
 // runner_lost, and what the run's wall left is removed. A run whose runner still lives
-// is [ErrRunning]; a receiver that said stop during the run is sent nothing.
+// is [ErrRunning]; a server that said stop during the run is sent nothing.
 func Resend(ctx context.Context, spec ResendSpec) (*ResendResult, error) {
 	if spec.Report == nil {
 		spec.Report = func(string) {}
@@ -65,11 +66,16 @@ func Resend(ctx context.Context, spec ResendSpec) (*ResendResult, error) {
 	if err := CheckRunID(runID); err != nil {
 		return nil, err
 	}
-	if spec.Webhook == nil {
-		return nil, errors.New("no webhook to send the record to")
+	if spec.Server == nil {
+		return nil, errors.New("no server to send the record to")
 	}
-	b, _ := json.Marshal(spec.Webhook)
-	hook, err := webhook.Read("webhook", b)
+	b, _ := json.Marshal(spec.Server)
+	cfg, err := server.Read("server", b)
+	if err != nil {
+		return nil, err
+	}
+	client := &server.Client{Config: cfg, UserAgent: "qory-runner/" + spec.RunnerVersion}
+	conf, _, err := client.Discover(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -100,22 +106,21 @@ func Resend(ctx context.Context, spec ResendSpec) (*ResendResult, error) {
 		return nil, err
 	}
 	if stopped {
-		spec.Report("the receiver said stop during the run; nothing is sent")
+		spec.Report("the server said stop during the run; nothing is sent")
 		return res, nil
 	}
 	// What was spooled is in the events file as well, and is spooled again if the
-	// receiver still does not take it.
+	// server still does not take it.
 	if err := os.RemoveAll(filepath.Join(spec.Dir, sink.UndeliveredDir)); err != nil {
 		return nil, err
 	}
 	var owed []recorded
 	for _, l := range lines {
-		if hook.Wants(l.Type) && !accepted[l.Sequence] {
+		if conf.Wants(l.Type) && !accepted[l.Sequence] {
 			owed = append(owed, l)
 		}
 	}
-	client := &webhook.Client{Config: hook, UserAgent: "qory-runner/" + spec.RunnerVersion}
-	posts := sink.NewWebhook(client, spec.Dir, spec.Report)
+	posts := sink.NewServer(client, sink.Target{URL: conf.Events.URL, Types: conf.Events.Types}, spec.Dir, spec.Report, nil)
 	for _, l := range owed {
 		if !posts.Resend(ctx, l.line, l.Sequence) {
 			break
@@ -190,7 +195,7 @@ func closeRecord(file, runID string, lines *[]recorded) (bool, error) {
 		}
 	}
 	if started.IsZero() {
-		// A run the receiver's ping refused never started, and has no exit to record.
+		// A run the server's ping refused never started, and has no exit to record.
 		return false, nil
 	}
 	last := (*lines)[len(*lines)-1]

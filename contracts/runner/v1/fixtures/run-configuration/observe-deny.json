@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "security_policy": {
+    "version": 1,
+    "egress": {
+      "mode": "observe",
+      "allow": ["api.example", "*.example"],
+      "deny": ["tracker.example", "*.ads.example"]
+    }
+  }
+}

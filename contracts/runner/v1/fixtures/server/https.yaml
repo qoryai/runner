@@ -1,0 +1,5 @@
+# A server elsewhere: https, the origin only. The runner finds the endpoints under it.
+version: 1
+url: https://qory.example
+access_key: ak_f1xt0re000000000
+secret: fixture-secret-not-a-real-one

@@ -22,15 +22,15 @@ earlier one.
 The runner's promises are written down, so the test is whether one was broken. They are
 in the contract: [what every wall guarantees](contracts/runner/v1/README.md#the-wall),
 [credentials](contracts/runner/v1/README.md#credentials) and
-[the webhook](contracts/runner/v1/README.md#the-webhook). For example:
+[the server](contracts/runner/v1/README.md#the-server). For example:
 
 - a session behind a wall reaches a host, or a path of a host, the run's policy denies;
 - a session reads a credential the runner holds for it, the run's authority key, the
-  proxy's token or the webhook's secret;
+  proxy's token or the server's secret;
 - a session changes the run's record, or what the runner reports;
 - a run's policy, a descriptor or a credential adapter's answer makes the runner do
   something the binary does not already do, or widens what the machine's policy allows;
-- a receiver accepts a delivery the runner did not sign, by following this contract.
+- a receiver accepts a request the runner did not sign, by following this contract.
 
 ## What is not
 

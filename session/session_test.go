@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,18 +14,125 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/creack/pty"
+
 	"github.com/qoryai/runner/contracts"
 	"github.com/qoryai/runner/internal/policy"
-	"github.com/qoryai/runner/internal/receiver"
 	"github.com/qoryai/runner/internal/socket"
+	"github.com/qoryai/runner/receiver"
 	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/runtimes/claude"
 	"github.com/qoryai/runner/session"
 )
+
+const (
+	testSecret = "fixture-secret-not-a-real-one"
+	testKey    = "ak_f1xt0re000000000"
+)
+
+// control is a server of the contract for the tests: the reference receiver in front
+// of a store, whose configuration document names its own events endpoint and, when
+// the test gives it one, a run configuration it may change during a run.
+type control struct {
+	srv   *httptest.Server
+	store *receiver.File
+	// refuse, when set, is the status every request gets instead of an answer.
+	refuse atomic.Int32
+	// hits counts every request; discoveries the discovery fetches; fetches the run
+	// configuration fetches.
+	hits, discoveries, fetches atomic.Int32
+	// run is the run configuration served, nil for none; digest is its digest.
+	mu     sync.Mutex
+	run    []byte
+	digest string
+	// answered, when set, is the run configuration digest the answers to a delivery
+	// carry instead of the served document's.
+	answered string
+}
+
+// answering sets the run configuration digest on a delivery's answer.
+type answering struct {
+	http.ResponseWriter
+	digest string
+}
+
+func (a answering) WriteHeader(code int) {
+	if a.Header().Get("X-Qory-Run-Configuration") != "" {
+		a.Header().Set("X-Qory-Run-Configuration", a.digest)
+	}
+	a.ResponseWriter.WriteHeader(code)
+}
+
+func newControl(t *testing.T) *control {
+	t.Helper()
+	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &control{store: store}
+	h := &receiver.Handler{
+		Keys:  func(k string) ([]string, bool) { return []string{testSecret}, k == testKey },
+		Store: store,
+		Configuration: func() ([]byte, string) {
+			doc := `{"version":1,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.run != nil {
+				doc += `,"run":{"url":"` + c.srv.URL + `/v1/run-configuration"}`
+			}
+			doc += "}"
+			return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
+		},
+		RunConfiguration: func(forge, repository string) ([]byte, string, bool) {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			return c.run, c.digest, c.run != nil
+		},
+	}
+	c.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c.hits.Add(1)
+		if r.URL.Path == "/.well-known/qory-configuration" {
+			c.discoveries.Add(1)
+		}
+		if r.URL.Path == "/v1/run-configuration" {
+			c.fetches.Add(1)
+		}
+		if code := c.refuse.Load(); code != 0 {
+			w.WriteHeader(int(code))
+			return
+		}
+		c.mu.Lock()
+		answered := c.answered
+		c.mu.Unlock()
+		if answered != "" && r.Method == http.MethodPost {
+			w = answering{w, answered}
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(c.srv.Close)
+	t.Cleanup(func() { store.Close() })
+	return c
+}
+
+// serve makes the control serve a run configuration with the policy, under a digest
+// of the test's choosing.
+func (c *control) serve(policy, digest string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.run, c.digest = []byte(`{"version":1,"security_policy":`+policy+`}`), digest
+}
+
+func (c *control) server() *session.Server {
+	return &session.Server{Version: 1, URL: c.srv.URL, AccessKey: testKey, Secret: testSecret}
+}
 
 // TestMain lets the test binary stand in for a runtime and for the hook forwarder, so
 // no real runtime and no shell script are needed: with QORY_TEST_RUNTIME set it acts as
@@ -192,14 +300,15 @@ func ofType(evs []map[string]any, typ string) []map[string]any {
 func data(e map[string]any) map[string]any { return e["data"].(map[string]any) }
 
 // TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus is the run end to end on pipes:
-// the policy is pinned and applied, the allowed host goes through and the denied one
-// does not, both are recorded, the runtime's output is logged per stream and mapped to
+// the policy is pinned and applied as it is, the harness's hosts reported and deciding
+// nothing, the allowed host goes through and the denied one does not, both are
+// recorded with their outcome, the runtime's output is logged per stream and mapped to
 // session.result, the installed hook reaches the socket and becomes session.ended, the
 // heartbeat ticks, and the exit status is the runtime's.
 func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
 	defer origin.Close()
-	pol := &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1", "api.anthropic.com"}}}
+	pol := &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "enforce", Allow: []string{"127.0.0.1", "api.anthropic.com"}, Deny: []string{"tracker.example"}}}
 	sp := spec(t, pol, "FAKE_ALLOWED_URL="+origin.URL+"/allowed", "FAKE_DENIED_URL="+strings.Replace(origin.URL, "127.0.0.1", "localhost", 1)+"/denied", "FAKE_EXIT=3")
 	sp.Declared = []string{"127.0.0.1", "registry.npmjs.org"}
 	res, err := runWithSettingsEnv(t, sp)
@@ -214,11 +323,11 @@ func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 		t.Fatalf("event order: %v", types(evs))
 	}
 	applied := data(evs[1])
-	if applied["mode"] != "enforce" || applied["source"] != "config" || fmt.Sprint(applied["allow"]) != "[127.0.0.1]" || fmt.Sprint(applied["declared"]) != "[127.0.0.1 registry.npmjs.org]" || applied["digest"] == nil {
+	if applied["mode"] != "enforce" || applied["source"] != "config" || fmt.Sprint(applied["allow"]) != "[127.0.0.1 api.anthropic.com]" || fmt.Sprint(applied["harness_hosts"]) != "[127.0.0.1 registry.npmjs.org]" || fmt.Sprint(applied["deny"]) != "[tracker.example]" || applied["digest"] == nil || applied["declared"] != nil || applied["url"] != nil {
 		t.Errorf("policy_applied %v", applied)
 	}
 	egress := ofType(evs, "ai.qory.run.egress")
-	if len(egress) != 2 || data(egress[0])["decision"] != "allowed" || data(egress[0])["rule"] != "127.0.0.1" || data(egress[1])["decision"] != "denied" || data(egress[1])["host"] != "localhost" {
+	if len(egress) != 2 || data(egress[0])["decision"] != "allowed" || data(egress[0])["rule"] != "127.0.0.1" || data(egress[0])["outcome"] != "connected" || data(egress[1])["decision"] != "denied" || data(egress[1])["host"] != "localhost" || data(egress[1])["outcome"] != "refused" {
 		t.Errorf("egress %v", egress)
 	}
 	streams := map[string]bool{}
@@ -250,7 +359,7 @@ func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 		t.Errorf("settings.json:\n%s", settings)
 	}
 	if _, err := os.Stat(filepath.Join(res.Dir, "undelivered")); !os.IsNotExist(err) {
-		t.Error("an undelivered directory exists with no webhook")
+		t.Error("an undelivered directory exists with no server")
 	}
 }
 
@@ -272,9 +381,9 @@ func types(evs []map[string]any) []string {
 	return out
 }
 
-// TestNoPolicyObservesAndNoWebhookNeedsNoPing pins the defaults: no policy is
-// observe with source none, a denied host is not denied, and nothing is posted.
-func TestNoPolicyObservesAndNoWebhookNeedsNoPing(t *testing.T) {
+// TestNoPolicyObservesAndNoServerNeedsNoPing pins the defaults: no policy is observe
+// with source none, a denied host is not denied, and nothing is posted.
+func TestNoPolicyObservesAndNoServerNeedsNoPing(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
 	defer origin.Close()
 	sp := spec(t, nil, "FAKE_DENIED_URL="+strings.Replace(origin.URL, "127.0.0.1", "localhost", 1))
@@ -287,7 +396,7 @@ func TestNoPolicyObservesAndNoWebhookNeedsNoPing(t *testing.T) {
 	if a := data(evs[1]); a["mode"] != "observe" || a["source"] != "none" || a["digest"] != nil {
 		t.Errorf("policy_applied %v", a)
 	}
-	if e := ofType(evs, "ai.qory.run.egress"); len(e) != 1 || data(e[0])["decision"] != "allowed" || data(e[0])["rule"] != "" {
+	if e := ofType(evs, "ai.qory.run.egress"); len(e) != 1 || data(e[0])["decision"] != "allowed" || data(e[0])["rule"] != "" || data(e[0])["outcome"] != "connected" {
 		t.Errorf("egress %v", e)
 	}
 	if len(ofType(evs, "ai.qory.ping")) != 0 || res.ExitCode != 0 || res.State != "succeeded" {
@@ -312,50 +421,77 @@ func TestInvalidPolicyMeansNoRun(t *testing.T) {
 	}
 }
 
-// TestWebhookPingsFailsClosedAndDelivers pins the webhook side: with a receiver that
-// answers, the ping is the first event and every event reaches the store; with one that
-// refuses, no run starts; with --local, the same configuration is ignored.
-func TestWebhookPingsFailsClosedAndDelivers(t *testing.T) {
-	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	refuse := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if refuse {
-			w.WriteHeader(500)
-			return
-		}
-		(&receiver.Handler{Secret: "fixture-secret-not-a-real-one", Store: store}).ServeHTTP(w, r)
-	}))
-	defer srv.Close()
-	cfg := &session.Webhook{Version: 1, URL: srv.URL + "/events", Secret: "fixture-secret-not-a-real-one"}
+// TestServerIsDiscoveredPingedAndDelivered pins the server side: the configuration
+// document is fetched first, the ping is the first event with the contract revision,
+// and every event reaches the store; with a server that refuses the discovery, no run
+// and no run directory; with one that refuses the ping, no run; with --local, the
+// server is not contacted.
+func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
+	c := newControl(t)
+	cfg := c.server()
 
 	sp := spec(t, nil)
 	sp.Forwarder = nil
-	sp.Webhook = cfg
+	sp.Server = cfg
 	res, err := session.Run(context.Background(), sp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	evs := events(t, res)
-	if evs[0]["type"] != "ai.qory.ping" || fmt.Sprint(data(evs[0])["events"]) != "[*]" {
+	if evs[0]["type"] != "ai.qory.ping" || fmt.Sprint(data(evs[0])["events"]) != "[*]" || data(evs[0])["contract_version"] != 1.0 {
 		t.Errorf("first event %v", evs[0])
 	}
-	if store.Count() != len(evs) || res.Undelivered != 0 {
-		t.Errorf("store holds %d of %d events, %d undelivered", store.Count(), len(evs), res.Undelivered)
+	if c.store.Count() != len(evs) || res.Undelivered != 0 || c.discoveries.Load() != 1 {
+		t.Errorf("store holds %d of %d events, %d undelivered, %d discoveries", c.store.Count(), len(evs), res.Undelivered, c.discoveries.Load())
+	}
+	if a := data(evs[2]); evs[2]["type"] != "ai.qory.run.policy_applied" || a["source"] != "none" || a["url"] != nil {
+		t.Errorf("a server with no run section: policy_applied %v", a)
 	}
 	// Everything was accepted during the run, the ping too, so nothing is owed after it.
-	if again, err := session.Resend(context.Background(), session.ResendSpec{Dir: res.Dir, Webhook: cfg}); err != nil || again.Sent != 0 || again.Closed || store.Count() != len(evs) {
+	if again, err := session.Resend(context.Background(), session.ResendSpec{Dir: res.Dir, Server: cfg}); err != nil || again.Sent != 0 || again.Closed || c.store.Count() != len(evs) {
 		t.Errorf("resend after a delivered run: %+v, %v", again, err)
 	}
 
-	refuse = true
+	c.refuse.Store(500)
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Webhook = cfg
-	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "ping") {
+	sp.Server = cfg
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "configuration "+c.srv.URL+"/.well-known/qory-configuration: status 500") {
+		t.Errorf("refused discovery: %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs")); len(entries) != 0 {
+		t.Errorf("run directories after a refused discovery: %d", len(entries))
+	}
+
+	c.refuse.Store(0)
+	refusePing := &session.Server{Version: 1, URL: c.srv.URL, AccessKey: "ak_0000000000000000", Secret: testSecret}
+	sp = spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server = refusePing
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "status 401") {
+		t.Errorf("an unknown key: %v", err)
+	}
+	c.refuse.Store(0)
+	c.mu.Lock()
+	c.run = nil
+	c.mu.Unlock()
+	sp = spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server = cfg
+	sp.Labels = map[string]string{"forge": "example.test"}
+	pinged := false
+	stopPing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/qory-configuration" {
+			w.Header().Set("X-Qory-Configuration", "sha256=x")
+			io.WriteString(w, `{"version":1,"events":{"url":"`+c.srv.URL+`/nowhere","types":["*"]}}`)
+			return
+		}
+		pinged = true
+		w.WriteHeader(500)
+	}))
+	defer stopPing.Close()
+	sp.Server = &session.Server{Version: 1, URL: stopPing.URL, AccessKey: testKey, Secret: testSecret}
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "ping "+c.srv.URL+"/nowhere: status 404") {
 		t.Errorf("refused ping: %v", err)
 	}
 	if entries, _ := os.ReadDir(filepath.Join(sp.Dir, ".qory", "runs")); len(entries) != 1 {
@@ -363,13 +499,218 @@ func TestWebhookPingsFailsClosedAndDelivers(t *testing.T) {
 	} else if evs, _ := os.ReadFile(filepath.Join(sp.Dir, ".qory", "runs", entries[0].Name(), "events.jsonl")); strings.Count(string(evs), "\n") != 1 {
 		t.Errorf("the refused run's file holds more than the ping:\n%s", evs)
 	}
+	_ = pinged
 
+	before := c.hits.Load()
 	sp = spec(t, nil)
 	sp.Forwarder = nil
-	sp.Webhook = cfg
+	sp.Server = cfg
 	sp.Local = true
-	if res, err := session.Run(context.Background(), sp); err != nil || len(ofType(events(t, res), "ai.qory.ping")) != 0 {
-		t.Errorf("local run: %v", err)
+	if res, err := session.Run(context.Background(), sp); err != nil || len(ofType(events(t, res), "ai.qory.ping")) != 0 || c.hits.Load() != before {
+		t.Errorf("local run: %v, the server was contacted %d times", err, c.hits.Load()-before)
+	}
+}
+
+// TestRunConfigurationIsThePolicyAndReloadsOnTheDigest pins the run configuration:
+// with a server that names one, its policy is the run's, over the spec's own, with
+// the source fetched and both digests; and when an answer says another is in force,
+// it is fetched and put in force with a second policy_applied, and the next
+// connection is decided by it.
+func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	c := newControl(t)
+	first, second := "sha256="+strings.Repeat("1", 64), "sha256="+strings.Repeat("2", 64)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, first)
+	dir := t.TempDir()
+	sp := spec(t, &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}}, "FAKE_ALLOWED_URL="+origin.URL+"/after")
+	sp.Forwarder = nil
+	sp.Server = c.server()
+	sp.Labels = map[string]string{"forge": "github.com", "repository": "acme/shop"}
+	// The runtime waits for the test's go-ahead, then reaches the origin.
+	sp.Command, sp.Args = "sh", []string{"-c", `while [ ! -f "$1" ]; do sleep 0.05; done; exec "$0"`, os.Args[0], filepath.Join(dir, "go")}
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	runDir := filepath.Join(sp.Dir, ".qory", "runs", sp.RunID)
+	done := make(chan struct{})
+	var res *session.Result
+	var runErr error
+	go func() {
+		defer close(done)
+		res, runErr = session.Run(context.Background(), sp)
+	}()
+	applied := func() int {
+		b, _ := os.ReadFile(filepath.Join(runDir, "events.jsonl"))
+		return strings.Count(string(b), `"ai.qory.run.policy_applied"`)
+	}
+	waitFor(t, func() bool { return applied() == 1 })
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":[]}}`, second)
+	waitFor(t, func() bool { return applied() == 2 })
+	if err := os.WriteFile(filepath.Join(dir, "go"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	evs := events(t, res)
+	pa := ofType(evs, "ai.qory.run.policy_applied")
+	if len(pa) != 2 {
+		t.Fatalf("policy_applied events: %v", pa)
+	}
+	at, then := data(pa[0]), data(pa[1])
+	if at["source"] != "fetched" || at["mode"] != "enforce" || fmt.Sprint(at["allow"]) != "[127.0.0.1]" || at["run_configuration"] != first || at["url"] != c.srv.URL+"/v1/run-configuration" || at["digest"] == nil {
+		t.Errorf("the first policy_applied %v", at)
+	}
+	if then["source"] != "fetched" || fmt.Sprint(then["allow"]) != "[]" || then["run_configuration"] != second || then["digest"] == at["digest"] {
+		t.Errorf("the second policy_applied %v", then)
+	}
+	egress := ofType(evs, "ai.qory.run.egress")
+	if len(egress) != 1 || data(egress[0])["decision"] != "denied" || data(egress[0])["outcome"] != "refused" || data(egress[0])["mode"] != "enforce" {
+		t.Errorf("egress after the reload %v", egress)
+	}
+	if c.store.Count() != len(evs) {
+		t.Errorf("the store holds %d of %d events", c.store.Count(), len(evs))
+	}
+	// A run section that does not answer is no run.
+	c.mu.Lock()
+	c.run = []byte("not json")
+	c.mu.Unlock()
+	sp = spec(t, nil)
+	sp.Forwarder = nil
+	sp.Server = c.server()
+	if _, err := session.Run(context.Background(), sp); err == nil || !strings.Contains(err.Error(), "run configuration "+c.srv.URL+"/v1/run-configuration") {
+		t.Errorf("a run configuration that is not one: %v", err)
+	}
+}
+
+// waiting is a run whose runtime waits for the test's go-ahead and then, as the fake
+// runtime, reaches what its environment names: a run to reload under.
+type waiting struct {
+	t    *testing.T
+	dir  string
+	gate string
+	done chan struct{}
+	res  *session.Result
+	err  error
+	mu   sync.Mutex
+	said []string
+}
+
+func startWaiting(t *testing.T, sp session.Spec) *waiting {
+	t.Helper()
+	w := &waiting{t: t, gate: filepath.Join(t.TempDir(), "go"), done: make(chan struct{})}
+	sp.Forwarder = nil
+	sp.Command, sp.Args = "sh", []string{"-c", `while [ ! -f "$1" ]; do sleep 0.05; done; exec "$0"`, os.Args[0], w.gate}
+	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
+	sp.Report = func(l string) {
+		t.Log("report:", l)
+		w.mu.Lock()
+		w.said = append(w.said, l)
+		w.mu.Unlock()
+	}
+	w.dir = filepath.Join(sp.Dir, ".qory", "runs", sp.RunID)
+	go func() {
+		defer close(w.done)
+		w.res, w.err = session.Run(context.Background(), sp)
+	}()
+	return w
+}
+
+// applied is how many policy_applied events the record holds so far.
+func (w *waiting) applied() int {
+	b, _ := os.ReadFile(filepath.Join(w.dir, "events.jsonl"))
+	return strings.Count(string(b), `"ai.qory.run.policy_applied"`)
+}
+
+// reported says whether a report line holding the text was made.
+func (w *waiting) reported(text string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.ContainsFunc(w.said, func(l string) bool { return strings.Contains(l, text) })
+}
+
+// finish lets the runtime go and returns the run's events.
+func (w *waiting) finish() []map[string]any {
+	w.t.Helper()
+	if err := os.WriteFile(w.gate, nil, 0o644); err != nil {
+		w.t.Fatal(err)
+	}
+	<-w.done
+	if w.err != nil {
+		w.t.Fatal(w.err)
+	}
+	return events(w.t, w.res)
+}
+
+func digest(c byte) string { return "sha256=" + strings.Repeat(string(c), 64) }
+
+// TestAReloadIsAsStrictAsAStart pins a reload without a wall: path rules the proxy
+// cannot hold take their hosts out of the allow list, so they are denied and the event
+// claims no paths; a policy that selects credentials, which a start refuses without a
+// wall, fails the reload and leaves the policy in force; and a run configuration the
+// server answered is not fetched again until the answered digest changes, nor is one
+// that turns out to be the one in force put in force again.
+func TestAReloadIsAsStrictAsAStart(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer origin.Close()
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1"]}}`, digest('1'))
+	sp := spec(t, nil, "FAKE_ALLOWED_URL="+origin.URL+"/after")
+	sp.Server = c.server()
+	w := startWaiting(t, sp)
+	waitFor(t, func() bool { return w.applied() == 1 })
+
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1","api.example"],"paths":{"127.0.0.1":["/ok/*"]}}}`, digest('2'))
+	waitFor(t, func() bool { return w.applied() == 2 })
+	if !w.reported("path rules, which need a wall") {
+		t.Error("nobody was told the path rules are not held")
+	}
+
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]},"credentials":[{"name":"model"}]}`, digest('3'))
+	waitFor(t, func() bool { return w.reported("selects credentials, which need a wall") })
+	fetched := c.fetches.Load()
+	time.Sleep(2500 * time.Millisecond)
+	if n := c.fetches.Load(); n != fetched {
+		t.Errorf("a run configuration that was refused was fetched %d more times under the same answered digest", n-fetched)
+	}
+
+	// The answers name a digest the run does not hold, and the fetch finds the
+	// document in force: fetched once, nothing put in force, nothing said.
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["127.0.0.1","api.example"],"paths":{"127.0.0.1":["/ok/*"]}}}`, digest('2'))
+	c.mu.Lock()
+	c.answered = digest('4')
+	c.mu.Unlock()
+	waitFor(t, func() bool { return c.fetches.Load() == fetched+1 })
+	time.Sleep(2500 * time.Millisecond)
+	if n := c.fetches.Load(); n != fetched+1 || w.applied() != 2 {
+		t.Errorf("the document in force under another answered digest: %d fetches, %d policy_applied", n-fetched, w.applied())
+	}
+	evs := w.finish()
+	pa := ofType(evs, "ai.qory.run.policy_applied")
+	if len(pa) != 2 {
+		t.Fatalf("policy_applied events: %v", pa)
+	}
+	then := data(pa[1])
+	if fmt.Sprint(then["allow"]) != "[api.example]" || then["paths"] != nil || then["run_configuration"] != digest('2') || then["credentials"] != nil {
+		t.Errorf("the second policy_applied %v", then)
+	}
+	egress := ofType(evs, "ai.qory.run.egress")
+	if len(egress) != 1 || data(egress[0])["decision"] != "denied" || data(egress[0])["host"] != "127.0.0.1" || data(egress[0])["outcome"] != "refused" {
+		t.Errorf("egress to a host whose paths cannot be held %v", egress)
+	}
+	if w.reported("context canceled") {
+		t.Error("the run's end was reported as a failed reload")
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -395,6 +736,152 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 	if l := ofType(events(t, res), "ai.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
 		t.Errorf("log %v", l)
 	}
+	if size := data(events(t, res)[0])["terminal"]; fmt.Sprint(size) != "map[cols:80 rows:24]" {
+		t.Errorf("run.started terminal %v; want the default when stdin is not a terminal", size)
+	}
+}
+
+// TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas pins the inference: a caller at
+// a terminal that starts the runtime with an argument its descriptor names as headless,
+// -p for Claude Code, gets a session on pipes, recorded as not interactive and with its
+// structured output read, exactly as if it had said headless. A runtime that names no
+// such argument keeps the caller's pseudo-terminal, -p or not.
+func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
+	t.Run("the descriptor names it", func(t *testing.T) {
+		sp := spec(t, nil)
+		sp.Interactive = true
+		sp.Args = append(sp.Args, "-p", "Reply pong")
+		res, err := session.Run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evs := events(t, res)
+		started := data(evs[0])
+		if started["interactive"] != false || started["terminal"] != nil {
+			t.Errorf("run.started %v; want not interactive and no terminal size", started)
+		}
+		if l := ofType(evs, "ai.qory.run.log"); len(l) == 0 || data(l[0])["stream"] == "terminal" {
+			t.Errorf("log %v; want the streams of pipes", l)
+		}
+		if r := ofType(evs, "ai.qory.session.result"); len(r) != 1 || data(r[0])["result"] != "done" {
+			t.Errorf("session.result %v; want the output read", r)
+		}
+	})
+	t.Run("the runtime names none", func(t *testing.T) {
+		sp := spec(t, nil)
+		sp.Forwarder = nil
+		sp.Interactive = true
+		sp.Runtime = runtimes.Bare("other-agent")
+		sp.Command = "sh"
+		sp.Args = []string{"-c", "echo hello", "sh", "-p"}
+		res, err := session.Run(context.Background(), sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evs := events(t, res)
+		if started := data(evs[0]); started["interactive"] != true || started["terminal"] == nil {
+			t.Errorf("run.started %v; want the caller's terminal kept", started)
+		}
+		if l := ofType(evs, "ai.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
+			t.Errorf("log %v", l)
+		}
+	})
+}
+
+// TestInteractiveRunFollowsTheTerminalSize pins the size in the record: the
+// pseudo-terminal starts at the size of the terminal stdin is, reported in run.started,
+// and when that terminal is resized the pseudo-terminal follows and run.resized says so
+// at the sequence where it did, before the output drawn on the new size.
+func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
+	master, tty, err := pty.Open()
+	if err != nil {
+		t.Skip("no pseudo-terminal:", err)
+	}
+	defer master.Close()
+	defer tty.Close()
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 100, Rows: 40}); err != nil {
+		t.Fatal(err)
+	}
+	var stream, out syncBuffer
+	sp := spec(t, nil)
+	sp.Forwarder = nil
+	sp.Interactive = true
+	sp.Stdin = tty
+	sp.Stdout = &out
+	sp.Events = &stream
+	sp.Command = "sh"
+	sp.Args = []string{"-c", "stty size; read line; stty size"}
+	done := make(chan *session.Result, 1)
+	go func() {
+		res, err := session.Run(context.Background(), sp)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- res
+	}()
+	waitFor(t, func() bool { return strings.Contains(out.String(), "40 100") })
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 120, Rows: 50}); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return strings.Contains(stream.String(), `"ai.qory.run.resized"`) })
+	if _, err := io.WriteString(master, "go\n"); err != nil {
+		t.Fatal(err)
+	}
+	res := <-done
+	if res == nil {
+		t.FailNow()
+	}
+	evs := events(t, res)
+	if size := data(evs[0])["terminal"]; fmt.Sprint(size) != "map[cols:100 rows:40]" {
+		t.Errorf("run.started terminal %v", size)
+	}
+	resized := ofType(evs, "ai.qory.run.resized")
+	if len(resized) != 1 || fmt.Sprint(data(resized[0])) != "map[cols:120 rows:50]" {
+		t.Fatalf("run.resized %v", resized)
+	}
+	// The sequence: what was drawn before the resize is logged before it, what was
+	// drawn after it after.
+	var before, after []byte
+	seen := false
+	for _, e := range evs {
+		if e["type"] == "ai.qory.run.resized" {
+			seen = true
+		} else if e["type"] == "ai.qory.run.log" {
+			b, _ := base64.StdEncoding.DecodeString(data(e)["bytes"].(string))
+			if seen {
+				after = append(after, b...)
+			} else {
+				before = append(before, b...)
+			}
+		}
+	}
+	if !strings.Contains(string(before), "40 100") || strings.Contains(string(before), "50 120") {
+		t.Errorf("logged before the resize: %q", before)
+	}
+	if !strings.Contains(string(after), "50 120") {
+		t.Errorf("logged after the resize: %q", after)
+	}
+}
+
+// syncBuffer is a buffer written from the run and read by the test.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // TestContextEndStopsTheRuntime pins that a cancelled context ends the session with a
@@ -557,14 +1044,9 @@ func TestStopSignalIsTheOneTheRunNames(t *testing.T) {
 // relies on: what the receiver did not get is sent, once; a record its runner left
 // unfinished is closed with the reason; and a run that still goes is left alone.
 func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
-	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	srv := httptest.NewServer(&receiver.Handler{Secret: "fixture-secret-not-a-real-one", Store: store})
-	defer srv.Close()
-	cfg := &session.Webhook{Version: 1, URL: srv.URL + "/events", Secret: "fixture-secret-not-a-real-one"}
+	c := newControl(t)
+	store := c.store
+	cfg := c.server()
 
 	// A run nobody received, as one whose receiver was away.
 	sp := spec(t, nil)
@@ -576,14 +1058,14 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 	all := len(events(t, res))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	sent, err := session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Webhook: cfg})
+	sent, err := session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Server: cfg})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sent.Sent != all || sent.Undelivered != 0 || sent.Closed || store.Count() != all {
 		t.Errorf("first resend %+v, store holds %d of %d", sent, store.Count(), all)
 	}
-	if again, err := session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Webhook: cfg}); err != nil || again.Sent != 0 || store.Count() != all {
+	if again, err := session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Server: cfg}); err != nil || again.Sent != 0 || store.Count() != all {
 		t.Errorf("second resend %+v, %v, store holds %d", again, err, store.Count())
 	}
 
@@ -601,7 +1083,7 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := store.Count()
-	sent, err = session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Webhook: cfg})
+	sent, err = session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Server: cfg})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -631,7 +1113,7 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if _, err := session.Resend(ctx, session.ResendSpec{Dir: dir, Webhook: cfg}); !errors.Is(err, session.ErrRunning) {
+	if _, err := session.Resend(ctx, session.ResendSpec{Dir: dir, Server: cfg}); !errors.Is(err, session.ErrRunning) {
 		t.Errorf("resend of a run that still goes: %v", err)
 	}
 	stop()
@@ -705,5 +1187,46 @@ func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(res.Dir, "settings.json")); !os.IsNotExist(err) {
 		t.Error("something was prepared for a runtime the runner does not know")
+	}
+}
+
+// TestPolicyUnderACeilingKeepsBothDenyLists pins that a deny holds whatever the modes:
+// the ceiling's deny list is kept under observe, where the ceiling forbids nothing
+// else; both lists meet, the ceiling's first, under enforce and when an observing
+// policy takes the ceiling; and a policy with no deny under no deny carries none.
+func TestPolicyUnderACeilingKeepsBothDenyLists(t *testing.T) {
+	mk := func(mode string, allow, deny []string) *session.Policy {
+		return &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: mode, Allow: allow, Deny: deny}}
+	}
+	join := func(p *session.Policy) string {
+		return p.Egress.Mode + " " + strings.Join(p.Egress.Allow, ",") + " " + strings.Join(p.Egress.Deny, ",")
+	}
+	for _, c := range []struct {
+		name         string
+		run, ceiling *session.Policy
+		want         string
+	}{
+		{"observe ceiling with a deny", mk("observe", nil, []string{"tracker.example"}), mk("observe", nil, []string{"*.ads.example"}), "observe  *.ads.example,tracker.example"},
+		{"observe ceiling without a deny", mk("enforce", []string{"api.example"}, []string{"tracker.example"}), mk("observe", nil, nil), "enforce api.example tracker.example"},
+		{"enforce ceiling, enforce run", mk("enforce", []string{"api.example"}, []string{"tracker.example"}), mk("enforce", []string{"*.example"}, []string{"*.ads.example", "tracker.example"}), "enforce api.example *.ads.example,tracker.example"},
+		{"enforce ceiling, observe run", mk("observe", nil, []string{"tracker.example"}), mk("enforce", []string{"*.example"}, nil), "enforce *.example tracker.example"},
+		{"no deny anywhere", mk("enforce", []string{"api.example"}, nil), mk("enforce", []string{"*.example"}, nil), "enforce api.example "},
+	} {
+		if got := join(c.run.Under(c.ceiling)); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	if got := mk("enforce", []string{"api.example"}, nil).Under(mk("enforce", []string{"*.example"}, nil)); got.Egress.Deny != nil {
+		t.Errorf("a deny list from nowhere: %v", got.Egress.Deny)
+	}
+	p, err := session.ReadPolicy("run.yaml", []byte("version: 1\negress:\n  mode: observe\n  deny: [tracker.example]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(p.Egress.Deny, " ") != "tracker.example" {
+		t.Errorf("deny read as %v", p.Egress.Deny)
+	}
+	if _, err := session.ReadPolicy("run.yaml", []byte("version: 1\negress:\n  mode: observe\n  deny: [\"tracker.example:443\"]\n")); err == nil {
+		t.Error("a deny entry with a port was read")
 	}
 }

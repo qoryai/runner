@@ -1,6 +1,8 @@
 package session
 
 import (
+	"slices"
+
 	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/policy"
 )
@@ -11,7 +13,7 @@ import (
 type Policy struct {
 	// Version is the document version, 1.
 	Version int `json:"version"`
-	// Egress is the egress mode and the allow list.
+	// Egress is the egress mode, the allow list and the deny list.
 	Egress PolicyEgress `json:"egress"`
 	// Credentials are the credentials of [Spec.Credentials] the run may use, by name.
 	Credentials []PolicyCredential `json:"credentials,omitempty"`
@@ -31,6 +33,10 @@ type PolicyEgress struct {
 	// Allow are lower-case host names, or *. suffixes, in the contract's grammar. Nil
 	// and empty are the same: nothing, which under enforce reaches nothing.
 	Allow []string `json:"allow,omitempty"`
+	// Deny are hosts the session may not reach, in the same grammar, in either mode: a
+	// host an entry covers is denied before Allow and before Mode are consulted, with
+	// the entry as its rule.
+	Deny []string `json:"deny,omitempty"`
 	// Paths are the paths the session may ask of a host, by host. A host listed is one
 	// the proxy terminates TLS for.
 	Paths map[string][]string `json:"paths,omitempty"`
@@ -44,7 +50,7 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 	if err != nil {
 		return nil, &policy.Error{Name: name, Err: err}
 	}
-	out := &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(p.Egress.Mode), Allow: p.Egress.Allow, Paths: p.Egress.Paths}}
+	out := &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(p.Egress.Mode), Allow: p.Egress.Allow, Deny: p.Egress.Deny, Paths: p.Egress.Paths}}
 	for _, c := range p.Credentials {
 		out.Credentials = append(out.Credentials, PolicyCredential{Name: c.Name, Argument: c.Argument})
 	}
@@ -52,26 +58,42 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 }
 
 // Under returns the policy as it stands under a ceiling, the machine's own: a policy
-// narrows only. A nil ceiling, or one in mode observe, forbids nothing and the policy
-// stands as it is. Under a ceiling in mode enforce the mode is enforce: a policy in
-// mode observe asks for no limit of its own and gets the ceiling, and one in mode
-// enforce gets its entries the ceiling covers; an entry it does not cover is dropped,
-// as a harness declaration's is. Path rules narrow the same way: a host both name keeps
-// the policy's paths the ceiling's cover, and a host one of them names keeps its rules.
-// The credentials are the policy's own: a ceiling defines them and selects none.
+// narrows only. The deny lists of both hold whatever the modes, the ceiling's entries
+// first: a deny narrows, so neither side's is dropped. With that, a nil ceiling, or
+// one in mode observe, forbids nothing more and the policy stands as it is. Under a
+// ceiling in mode enforce the mode is enforce: a policy in mode observe asks for no
+// limit of its own and gets the ceiling, and one in mode enforce gets its entries the
+// ceiling covers; an entry it does not cover is dropped, as a harness declaration's
+// is. Path rules narrow the same way: a host both name keeps the policy's paths the
+// ceiling's cover, and a host one of them names keeps its rules. The credentials are
+// the policy's own: a ceiling defines them and selects none.
 func (p *Policy) Under(ceiling *Policy) *Policy {
-	if ceiling == nil || ceiling.Egress.Mode != string(policy.Enforce) {
+	if ceiling == nil {
 		return p
+	}
+	deny := bothDeny(ceiling.Egress.Deny, p.Egress.Deny)
+	if ceiling.Egress.Mode != string(policy.Enforce) {
+		if len(ceiling.Egress.Deny) == 0 {
+			return p
+		}
+		c := *p
+		c.Egress.Deny = deny
+		return &c
 	}
 	if p.Egress.Mode != string(policy.Enforce) {
 		c := *ceiling
+		c.Egress.Deny = deny
 		c.Credentials = p.Credentials
 		return &c
 	}
-	top := &policy.Loaded{Policy: policy.Policy{Egress: policy.Egress{Allow: ceiling.Egress.Allow}}}
-	allow := p.Egress.Allow
-	if allow == nil {
-		allow = []string{}
+	allow := []string{}
+	for _, entry := range p.Egress.Allow {
+		for _, above := range ceiling.Egress.Allow {
+			if policy.Covers(above, entry) {
+				allow = append(allow, entry)
+				break
+			}
+		}
 	}
 	paths := map[string][]string{}
 	for host, rules := range ceiling.Egress.Paths {
@@ -97,21 +119,40 @@ func (p *Policy) Under(ceiling *Policy) *Policy {
 	if len(paths) == 0 {
 		paths = nil
 	}
-	return &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: top.Narrow(allow), Paths: paths}, Credentials: p.Credentials}
+	return &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: allow, Deny: deny, Paths: paths}, Credentials: p.Credentials}
 }
 
-// Webhook is the webhook configuration, contracts/runner/v1/webhook.schema.json, as
-// the caller hands it to the runner: where to post every event as well as writing it,
-// signed with the secret. The runner validates it before the ping.
-type Webhook struct {
+// bothDeny is the deny list of a policy under a ceiling: the ceiling's entries, then
+// the policy's that are not already there, and nil when both are empty.
+func bothDeny(ceiling, own []string) []string {
+	if len(ceiling) == 0 && len(own) == 0 {
+		return nil
+	}
+	out := append([]string{}, ceiling...)
+	for _, entry := range own {
+		if !slices.Contains(out, entry) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// Server is the server document, contracts/runner/v1/server.schema.json, as the
+// caller hands it to the runner: the server whose configuration document says where
+// events go and where the run configuration is, the key the runner reports as, and the
+// secret that signs every request. The runner validates it, fetches the configuration
+// document, and posts a ping the server must accept, before anything starts.
+type Server struct {
 	// Version is the document version, 1.
 	Version int `json:"version"`
-	// URL is https, or http to a loopback address.
+	// URL is the server's origin: https, or http to a loopback address; no path.
 	URL string `json:"url"`
-	// Secret signs every delivery; at least 16 characters, shared with the receiver.
+	// AccessKey names the runner to the server: "ak_" and 16 lowercase Crockford
+	// base32 characters.
+	AccessKey string `json:"access_key"`
+	// Secret signs every request; at least 16 characters, shared with the server and
+	// never sent.
 	Secret string `json:"secret"`
-	// Events are the types to post, full names or "*"; nil is every type.
-	Events []string `json:"events,omitempty"`
 }
 
 // Credential is one credential as the machine defines it, [Spec.Credentials]: a token

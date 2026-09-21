@@ -3,12 +3,13 @@
 // The policy is the document of contracts/runner/v1/policy.schema.json, given to the
 // runner once by its caller and pinned for the run. [Read] reads it from bytes: a
 // document the schema refuses is a [*Error] and no run; [None] is the absent policy,
-// mode observe with nothing denied. The schema is the reader: a refused document
+// mode observe with no list to deny by. The schema is the reader: a refused document
 // carries the schema's message.
 //
-// A policy narrows only. [Loaded.Narrow] intersects it with the egress a harness
-// declared, and [Match] says which entry of an allow list covers a host. Nothing here
-// grants: the widest a policy can be is the absent one.
+// A policy narrows only. [Match] says which entry of a list, the allow list's or the
+// deny list's, covers a host, and [Covers] whether one entry stands above another,
+// which is how a policy is put under a ceiling. Nothing here grants: the widest a
+// policy can be is the absent one.
 package policy
 
 import (
@@ -25,8 +26,9 @@ import (
 // Mode is the egress mode of a policy.
 type Mode string
 
-// The two modes. Observe records every connection and denies none; Enforce denies a
-// connection to a host outside the allow list and records the denial.
+// The two modes. Observe records every connection and denies only what the deny list
+// names; Enforce denies a connection to a host outside the allow list as well, and
+// records the denial. The deny list is decided first in either mode.
 const (
 	Observe Mode = "observe"
 	Enforce Mode = "enforce"
@@ -41,8 +43,12 @@ type Policy struct {
 
 // Egress is the policy's egress section.
 type Egress struct {
-	Mode  Mode                `json:"mode"`
-	Allow []string            `json:"allow"`
+	Mode  Mode     `json:"mode"`
+	Allow []string `json:"allow"`
+	// Deny are the hosts the session may not reach, in Allow's grammar, in either
+	// mode: a host an entry covers is denied before Allow and before Mode are
+	// consulted, with the entry as its rule.
+	Deny  []string            `json:"deny,omitempty"`
 	Paths map[string][]string `json:"paths,omitempty"`
 }
 
@@ -56,12 +62,17 @@ type Selected struct {
 // digest, which is the version stamp of the run's policy.
 type Loaded struct {
 	Policy Policy
-	// Source is "config" when a document was given, "none" when there was none.
+	// Source is "config" when a document was given, "fetched" when the server's run
+	// configuration holds it, "none" when there was none.
 	Source string
 	// Digest is the hex sha256 of the document as canonical JSON, the runner's own
-	// serialization of it, when Source is "config": the version stamp of the run's
-	// policy, the same for the same policy however it was written.
+	// serialization of it, when Source is "config" or "fetched": the version stamp of
+	// the run's policy, the same for the same policy however it was written.
 	Digest string
+	// URL is where the run configuration was fetched from, and RunConfiguration the
+	// server's digest of it, opaque, when Source is "fetched".
+	URL              string
+	RunConfiguration string
 }
 
 // Error is a document that is not a policy. A run does not start on it.
@@ -76,7 +87,7 @@ func (e *Error) Error() string { return "policy " + e.Name + ": " + e.Err.Error(
 // Unwrap returns the underlying error.
 func (e *Error) Unwrap() error { return e.Err }
 
-// None is the absent policy: observe everything, deny nothing, source none.
+// None is the absent policy: observe everything with no list to deny by, source none.
 func None() *Loaded {
 	return &Loaded{Policy: Policy{Version: 1, Egress: Egress{Mode: Observe}}, Source: "none"}
 }
@@ -125,60 +136,31 @@ func Parse(name string, b []byte) (*Policy, error) {
 	return &p, nil
 }
 
-// Narrow returns the effective allow list: the policy's entries when nothing was
-// declared, else the declared entries the policy covers, in declared order without
-// duplicates. A declared entry the policy does not cover is dropped; a declaration can
-// only lower the ceiling.
-func (l *Loaded) Narrow(declared []string) []string {
-	if declared == nil {
-		return append([]string{}, l.Policy.Egress.Allow...)
-	}
-	var out []string
-	seen := map[string]bool{}
-	for _, d := range declared {
-		d = strings.ToLower(d)
-		if seen[d] {
-			continue
-		}
-		for _, entry := range l.Policy.Egress.Allow {
-			if Covers(entry, d) {
-				out = append(out, d)
-				seen[d] = true
-				break
-			}
-		}
-	}
-	if out == nil {
-		out = []string{}
-	}
-	return out
-}
-
-// Covers reports whether an allow entry covers a declared entry: a name is covered by
-// the same name or by a suffix pattern above it; a pattern is covered by the same
-// pattern or by a suffix pattern above it. "*.github.com" covers "api.github.com" and
+// Covers reports whether an allow entry covers another: a name is covered by the same
+// name or by a suffix pattern above it; a pattern is covered by the same pattern or by
+// a suffix pattern above it. "*.github.com" covers "api.github.com" and
 // "*.api.github.com", not "github.com".
-func Covers(entry, declared string) bool {
-	entry, declared = strings.ToLower(entry), strings.ToLower(declared)
-	if entry == declared {
+func Covers(entry, other string) bool {
+	entry, other = strings.ToLower(entry), strings.ToLower(other)
+	if entry == other {
 		return true
 	}
 	suffix, isPattern := strings.CutPrefix(entry, "*.")
 	if !isPattern {
 		return false
 	}
-	name := strings.TrimPrefix(declared, "*.")
+	name := strings.TrimPrefix(other, "*.")
 	return strings.HasSuffix(name, "."+suffix)
 }
 
-// Match returns the first entry of allow that matches host, and whether one did. A
-// host is compared lower-case and without a trailing dot; an IP literal matches only
-// an identical entry; a pattern "*.x" matches any host with at least one label before
-// ".x" and never "x" itself.
-func Match(allow []string, host string) (string, bool) {
+// Match returns the first entry of a list, the allow list or the deny list, that
+// matches host, and whether one did. A host is compared lower-case and without a
+// trailing dot; an IP literal matches only an identical entry; a pattern "*.x"
+// matches any host with at least one label before ".x" and never "x" itself.
+func Match(entries []string, host string) (string, bool) {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	ip := net.ParseIP(host) != nil
-	for _, entry := range allow {
+	for _, entry := range entries {
 		e := strings.ToLower(entry)
 		if e == host {
 			return entry, true

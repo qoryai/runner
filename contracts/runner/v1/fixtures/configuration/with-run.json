@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "events": {
+    "url": "https://qory.example/v1/events",
+    "types": [
+      "ai.qory.run.started",
+      "ai.qory.run.policy_applied",
+      "ai.qory.run.egress",
+      "ai.qory.run.heartbeat",
+      "ai.qory.run.exited"
+    ]
+  },
+  "run": {
+    "url": "https://qory.example/v1/run-configuration"
+  }
+}

@@ -28,12 +28,20 @@ import (
 
 // Descriptor is one runtime's descriptor.
 type Descriptor struct {
-	Version        int     `yaml:"version" json:"version"`
-	Runtime        string  `yaml:"runtime" json:"runtime"`
-	RuntimeVersion string  `yaml:"runtime_version" json:"runtime_version"`
-	Sources        Sources `yaml:"sources" json:"sources"`
-	Stop           *Stop   `yaml:"stop" json:"stop,omitempty"`
-	Rules          []Rule  `yaml:"rules" json:"rules"`
+	Version        int       `yaml:"version" json:"version"`
+	Runtime        string    `yaml:"runtime" json:"runtime"`
+	RuntimeVersion string    `yaml:"runtime_version" json:"runtime_version"`
+	Sources        Sources   `yaml:"sources" json:"sources"`
+	Stop           *Stop     `yaml:"stop" json:"stop,omitempty"`
+	Headless       *Headless `yaml:"headless" json:"headless,omitempty"`
+	Rules          []Rule    `yaml:"rules" json:"rules"`
+}
+
+// Headless is the arguments that mean the runtime runs without an interface: started
+// with one of them, the session runs on pipes whatever the caller asked. Nil when the
+// runtime names none, and the caller alone decides.
+type Headless struct {
+	Args []string `yaml:"args" json:"args"`
 }
 
 // Stop is how the runtime is asked to leave: a signal of the runner's list and the time

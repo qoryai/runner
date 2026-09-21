@@ -8,10 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qoryai/runner/internal/event"
-	"github.com/qoryai/runner/internal/webhook"
+	"github.com/qoryai/runner/internal/server"
 )
 
 // The batching rule: a batch is cut at BatchEvents events, at BatchBytes of encoded
@@ -22,7 +23,7 @@ const (
 	BatchWait   = time.Second
 )
 
-// The retry rule: a delivery the receiver did not accept is retried after Backoff,
+// The retry rule: a delivery the server did not accept is retried after Backoff,
 // doubling to MaxBackoff, until the run ends.
 const (
 	Backoff    = time.Second
@@ -32,25 +33,49 @@ const (
 // QueueSize is how many events the sink holds before it spools instead of blocking.
 const QueueSize = 10000
 
-// DeliveredFile is the file in the run directory that holds what the receiver accepted,
+// DeliveredFile is the file in the run directory that holds what the server accepted,
 // a line per batch written as the answer comes: the delivery id, then the sequence of
-// each event in it. A receiver's stop is the one word stopped. With events.jsonl it says
-// what a run cut short still owes its receiver.
+// each event in it. A server's stop is the one word stopped. With events.jsonl it says
+// what a run cut short still owes its server.
 const DeliveredFile = "delivered.log"
 
-// stoppedWord is the line of [DeliveredFile] that records the receiver's stop.
+// stoppedWord is the line of [DeliveredFile] that records the server's stop.
 const stoppedWord = "stopped"
 
 // UndeliveredDir is the directory under the run directory that holds the batches the
-// receiver did not accept, one file per delivery id.
+// server did not accept, one file per delivery id.
 const UndeliveredDir = "undelivered"
 
-// Webhook posts a run's events to one receiver.
-type Webhook struct {
-	client *webhook.Client
-	dir    string
-	report func(string)
-	sleep  func(context.Context, time.Duration) bool
+// Target is where events go and which: the events section of the configuration
+// document as it stands now, since a reload may replace it.
+type Target struct {
+	URL string
+	// Types are full type names, or "*" for every type. The ping is always wanted.
+	Types []string
+}
+
+// Wants reports whether the target asks for events of the type.
+func (t Target) Wants(typ string) bool {
+	if typ == "ai.qory.ping" {
+		return true
+	}
+	for _, e := range t.Types {
+		if e == "*" || e == typ {
+			return true
+		}
+	}
+	return false
+}
+
+// Server posts a run's events to the server's events endpoint.
+type Server struct {
+	client    *server.Client
+	target    atomic.Pointer[Target]
+	runDigest atomic.Pointer[string]
+	onDigests func(server.Digests)
+	dir       string
+	report    func(string)
+	sleep     func(context.Context, time.Duration) bool
 
 	queue   chan queued
 	acks    *os.File
@@ -70,16 +95,18 @@ type queued struct {
 	seq  string
 }
 
-// NewWebhook returns a sink posting to the client's webhook. spool is the run
+// NewServer returns a sink posting through the client to the target. spool is the run
 // directory, under which undelivered batches are written; report receives one line per
-// thing worth telling the user, a stop or a spool, and may be nil. The worker runs
-// until Close.
-func NewWebhook(client *webhook.Client, spool string, report func(string)) *Webhook {
+// thing worth telling the user, a stop or a spool, and may be nil; onDigests, when not
+// nil, gets the digests every answer carries, on the worker's goroutine, and must not
+// block. The worker runs until Close.
+func NewServer(client *server.Client, target Target, spool string, report func(string), onDigests func(server.Digests)) *Server {
 	if report == nil {
 		report = func(string) {}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &Webhook{client: client, dir: spool, report: report, queue: make(chan queued, QueueSize), ctx: ctx, cancel: cancel, done: make(chan struct{}), sleep: sleep}
+	w := &Server{client: client, onDigests: onDigests, dir: spool, report: report, queue: make(chan queued, QueueSize), ctx: ctx, cancel: cancel, done: make(chan struct{}), sleep: sleep}
+	w.target.Store(&target)
 	if acks, err := os.OpenFile(filepath.Join(spool, DeliveredFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
 		w.acks = acks
 	} else {
@@ -89,10 +116,18 @@ func NewWebhook(client *webhook.Client, spool string, report func(string)) *Webh
 	return w
 }
 
-// Write queues the event when the configuration wants its type. A full queue spools
-// the event as a batch of one rather than blocking; a sink told to stop drops it.
-func (w *Webhook) Write(ev *event.Event) error {
-	if !w.client.Config.Wants(ev.Type) {
+// SetTarget replaces where events go and which, for the batches from now on: what a
+// reloaded configuration document says.
+func (w *Server) SetTarget(t Target) { w.target.Store(&t) }
+
+// SetRunDigest sets the run configuration digest every delivery from now on carries;
+// empty means none is sent.
+func (w *Server) SetRunDigest(d string) { w.runDigest.Store(&d) }
+
+// Write queues the event when the target wants its type. A full queue spools the
+// event as a batch of one rather than blocking; a sink told to stop drops it.
+func (w *Server) Write(ev *event.Event) error {
+	if !w.target.Load().Wants(ev.Type) {
 		return nil
 	}
 	line, err := ev.JSON()
@@ -116,7 +151,7 @@ func (w *Webhook) Write(ev *event.Event) error {
 // Resend queues a line events.jsonl already holds, waiting for room in the queue: what
 // is sent again has no session to delay. It reports false once the sink stopped or the
 // context ended. It is not called together with Close.
-func (w *Webhook) Resend(ctx context.Context, line []byte, seq string) bool {
+func (w *Server) Resend(ctx context.Context, line []byte, seq string) bool {
 	w.mu.Lock()
 	over := w.stopped || w.closed
 	w.mu.Unlock()
@@ -132,7 +167,7 @@ func (w *Webhook) Resend(ctx context.Context, line []byte, seq string) bool {
 }
 
 // run is the worker: it forms batches from the queue and delivers each with retries.
-func (w *Webhook) run() {
+func (w *Server) run() {
 	defer close(w.done)
 	for {
 		batch, ok := w.next()
@@ -146,7 +181,7 @@ func (w *Webhook) run() {
 }
 
 // next collects one batch. It returns ok false once the queue is closed and drained.
-func (w *Webhook) next() ([]queued, bool) {
+func (w *Server) next() ([]queued, bool) {
 	var batch []queued
 	size := 0
 	var timer <-chan time.Time
@@ -170,26 +205,34 @@ func (w *Webhook) next() ([]queued, bool) {
 	}
 }
 
-// deliver posts one batch until it is accepted, the receiver says stop, or the sink's
-// context ends; then it spools what was not accepted.
-func (w *Webhook) deliver(batch []queued) {
+// deliver posts one batch until it is accepted, the server says stop, or the sink's
+// context ends; then it spools what was not accepted. The digests of every answer go
+// to the caller.
+func (w *Server) deliver(batch []queued) {
 	body := encode(batch)
 	id := event.NewID()
 	backoff := Backoff
 	for {
-		ctx, cancel := context.WithTimeout(w.ctx, webhook.Timeout)
-		status, err := w.client.Deliver(ctx, id, body)
+		ctx, cancel := context.WithTimeout(w.ctx, server.Timeout)
+		digest := ""
+		if d := w.runDigest.Load(); d != nil {
+			digest = *d
+		}
+		status, answer, err := w.client.Deliver(ctx, w.target.Load().URL, id, body, digest)
 		cancel()
+		if err == nil && w.onDigests != nil {
+			w.onDigests(answer)
+		}
 		switch {
-		case err == nil && webhook.Accepted(status):
+		case err == nil && server.Accepted(status):
 			w.ack(id, batch)
 			return
-		case err == nil && webhook.Stop(status):
+		case err == nil && server.Stop(status):
 			w.mu.Lock()
 			w.stopped = true
 			w.mu.Unlock()
 			w.ack(stoppedWord, nil)
-			w.report(fmt.Sprintf("the receiver answered %d; no further batch is sent for this run", status))
+			w.report(fmt.Sprintf("the server answered %d; no further batch is sent for this run", status))
 			return
 		}
 		if w.ctx.Err() != nil || !w.sleep(w.ctx, backoff) {
@@ -206,11 +249,11 @@ func (w *Webhook) deliver(batch []queued) {
 
 // Accepted records a delivery the sink did not make itself, the ping, which the runner
 // posts before there is a sink.
-func (w *Webhook) Accepted(id, seq string) { w.ack(id, []queued{{seq: seq}}) }
+func (w *Server) Accepted(id, seq string) { w.ack(id, []queued{{seq: seq}}) }
 
-// ack records an accepted batch, or the receiver's stop, as it happens: a runner that
+// ack records an accepted batch, or the server's stop, as it happens: a runner that
 // dies after it has nothing to say twice.
-func (w *Webhook) ack(id string, batch []queued) {
+func (w *Server) ack(id string, batch []queued) {
 	if w.acks == nil {
 		return
 	}
@@ -225,9 +268,9 @@ func (w *Webhook) ack(id string, batch []queued) {
 	}
 }
 
-// spool writes a batch the receiver did not accept under the undelivered directory,
+// spool writes a batch the server did not accept under the undelivered directory,
 // named by its delivery id, and counts its events. Called with the lock held.
-func (w *Webhook) spool(batch []queued, id string) {
+func (w *Server) spool(batch []queued, id string) {
 	w.lost += len(batch)
 	dir := filepath.Join(w.dir, UndeliveredDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -252,7 +295,7 @@ func encode(batch []queued) []byte {
 // Close stops taking events and lets the worker deliver what is queued until the
 // context ends; what is still undelivered then is spooled. It reports the count and
 // returns nil: an undelivered copy is not a failed run.
-func (w *Webhook) Close(ctx context.Context) error {
+func (w *Server) Close(ctx context.Context) error {
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
@@ -272,20 +315,20 @@ func (w *Webhook) Close(ctx context.Context) error {
 		w.acks.Close()
 	}
 	if n := w.Undelivered(); n > 0 {
-		w.report(fmt.Sprintf("%d events were not accepted by the webhook; see %s", n, filepath.Join(w.dir, UndeliveredDir)))
+		w.report(fmt.Sprintf("%d events were not accepted by the server; see %s", n, filepath.Join(w.dir, UndeliveredDir)))
 	}
 	return nil
 }
 
 // Undelivered is the number of events spooled so far.
-func (w *Webhook) Undelivered() int {
+func (w *Server) Undelivered() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.lost
 }
 
-// Stopped reports whether the receiver asked for nothing more.
-func (w *Webhook) Stopped() bool {
+// Stopped reports whether the server asked for nothing more.
+func (w *Server) Stopped() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.stopped
@@ -304,7 +347,7 @@ func sleep(ctx context.Context, d time.Duration) bool {
 }
 
 // Delivered reads the record of accepted batches in a run directory: the sequences the
-// receiver accepted, and whether it said stop. No file means nothing was accepted.
+// server accepted, and whether it said stop. No file means nothing was accepted.
 func Delivered(dir string) (map[string]bool, bool, error) {
 	b, err := os.ReadFile(filepath.Join(dir, DeliveredFile))
 	if err != nil && !os.IsNotExist(err) {

@@ -167,3 +167,49 @@ func TestCredentialsCrossAsAnAuthorityAndAPlaceholder(t *testing.T) {
 		}
 	}
 }
+
+// TestAReloadBehindAWallBringsCredentialsAndPaths pins the other half: behind a wall a
+// run with a server always has its authority, given to the enclosure at the start, so
+// a reloaded run configuration's path rules are held and its credentials resolved and
+// set, as a start's are, and recorded; a credential nobody defined fails the reload
+// and the policy in force stays.
+func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}`, digest('1'))
+	ow := &openWall{}
+	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp.Server = c.server()
+	sp.Wall, sp.Image = ow, "example.com/agent:1"
+	sp.Credentials = []session.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"}}
+	w := startWaiting(t, sp)
+	waitFor(t, func() bool { return w.applied() == 1 })
+	if !bytes.Contains(ow.got.CA, []byte("BEGIN CERTIFICATE")) {
+		t.Errorf("a walled run with a server got %q as the authority", ow.got.CA)
+	}
+
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example.com"],"paths":{"git.example.com":["/acme/*"]}},"credentials":[{"name":"model"}]}`, digest('2'))
+	waitFor(t, func() bool { return w.applied() == 2 })
+
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"credentials":[{"name":"nobody-defined"}]}`, digest('3'))
+	waitFor(t, func() bool { return w.reported("the policy in force stays") })
+
+	evs := w.finish()
+	pa := ofType(evs, "ai.qory.run.policy_applied")
+	if len(pa) != 2 {
+		t.Fatalf("policy_applied events: %v", pa)
+	}
+	if first := data(pa[0]); first["credentials"] != nil || first["terminated"] != nil {
+		t.Errorf("the first policy_applied %v", first)
+	}
+	then := data(pa[1])
+	creds, _ := then["credentials"].([]any)
+	terminated, _ := then["terminated"].([]any)
+	if len(creds) != 1 || creds[0].(map[string]any)["name"] != "model" || len(terminated) != 2 || then["paths"] == nil || then["run_configuration"] != digest('2') {
+		t.Errorf("the second policy_applied %v", then)
+	}
+	record, _ := os.ReadFile(filepath.Join(w.res.Dir, "events.jsonl"))
+	if strings.Contains(string(record), "the-token-held-outside") {
+		t.Error("the token reached the record")
+	}
+}

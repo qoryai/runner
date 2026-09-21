@@ -1,0 +1,6 @@
+# A deny entry is in allow's grammar: no port, no scheme and no path.
+version: 1
+egress:
+  mode: observe
+  deny:
+    - tracker.example:443

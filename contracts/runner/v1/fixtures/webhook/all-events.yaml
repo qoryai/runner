@@ -1,4 +1,0 @@
-# Post every event to a receiver on this machine.
-version: 1
-url: http://127.0.0.1:8787/events
-secret: fixture-secret-not-a-real-one

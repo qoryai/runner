@@ -13,9 +13,11 @@
 //   - keeps every credential of the runner's out of the session: the session's
 //     environment is the caller's plus the proxy and socket variables, nothing else
 //   - heartbeats while the runtime runs and reports the exit as the result
-//   - emits every event to the file sink in .qory/runs/<id>/ and, when a webhook is
-//     configured and the spec is not local, to the webhook too, after a ping the
-//     receiver must accept
+//   - with a server configured and the spec not local, fetches the server's
+//     configuration document with a signed GET, and the run configuration it names,
+//     whose policy is then the run's; emits every event to the file sink in
+//     .qory/runs/<id>/ and to the server's events endpoint too, after a ping the
+//     server must accept; reloads the policy when an answer says another is in force
 //   - takes the harness's reports over a local socket and maps them, with the
 //     runtime's structured output, to session events through the runtime's descriptor
 //

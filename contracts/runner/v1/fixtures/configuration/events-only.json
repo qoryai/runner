@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "events": {
+    "url": "https://qory.example/v1/events",
+    "types": ["*"]
+  }
+}

@@ -2,11 +2,19 @@
 //
 // The proxy listens on a loopback port, or on the address a wall asks for, and the
 // session's environment names it in the proxy variables, upper and lower case, with
-// loopback in NO_PROXY so a local server still answers. Every connection through it is one [Decision] handed to an observer:
-// a CONNECT tunnel, decided on its authority, or a plain request, decided on the
-// authority of its absolute-form target. In observe mode every decision allows; in
-// enforce mode a host no allow entry matches is denied with 403 and nothing is opened
-// for it. The session continues either way.
+// loopback in NO_PROXY so a local server still answers. Every connection through it is
+// one [Decision] handed to an observer: a CONNECT tunnel, decided on its authority, or a
+// plain request, decided on the authority of its absolute-form target. A host a deny
+// entry matches is denied with 403 in either mode, and nothing is opened for it; past
+// that, in observe mode every decision allows, and in enforce mode a host no allow
+// entry matches is denied the same way. The session continues either way. A decision
+// says what became of the connection as its outcome: dialled, or not dialled because
+// it was refused, or dialled and failed.
+//
+// The policy the proxy decides by is the one it was started with until [Proxy.SetPolicy]
+// replaces it: a run whose server sends a new run configuration reloads it this way,
+// for new connections at once, and a tunnel open to a host the new policy denies is
+// closed and recorded as refused.
 //
 // A proxy that serves an enclosure is guarded ([Proxy.Guard]): it dials from this
 // machine on behalf of something that is not on it, so what is on this machine is not
@@ -41,6 +49,17 @@ import (
 	"github.com/qoryai/runner/internal/policy"
 )
 
+// The outcomes of a connection, [Decision.Outcome].
+const (
+	// Connected says the dial succeeded.
+	Connected = "connected"
+	// DialFailed says the connection was allowed and the dial failed.
+	DialFailed = "dial_failed"
+	// Refused says nothing was dialled: the policy or the guard denied the connection,
+	// or a reload closed it.
+	Refused = "refused"
+)
+
 // Decision is one connection the session asked for and what the proxy did with it.
 type Decision struct {
 	Host string
@@ -48,18 +67,36 @@ type Decision struct {
 	// Method is "CONNECT" for a tunnel, "HTTP" for a plain request.
 	Method  string
 	Allowed bool
-	// Rule is the allow entry that matched, or empty when none did.
+	// Rule is the deny or allow entry that matched, the guard's rule when the guard
+	// refused, or empty when none did.
 	Rule string
+	// Mode is the policy mode the decision was made under.
+	Mode policy.Mode
+	// Outcome is [Connected], [DialFailed] or [Refused].
+	Outcome string
 	// RequestMethod, Path and PathRule are a request's inside a connection the proxy
 	// terminates, where Method is "HTTPS", or a plain request's to a host with path
 	// rules; Credential names the credential the proxy set on it, if it set one.
 	RequestMethod, Path, PathRule, Credential string
 }
 
+// rules is what the proxy decides by: the policy's mode, allow list and deny list, and
+// the hosts a guarded proxy reaches on this machine. It is replaced whole, never
+// changed.
+type rules struct {
+	mode  policy.Mode
+	allow []string
+	// deny is decided before allow and before the mode: a host it covers is denied in
+	// either mode.
+	deny []string
+	// opened are the entries of the allow list that name a host, as its owner wrote
+	// them: a *. suffix opens nothing on this machine.
+	opened []string
+}
+
 // Proxy is a listening proxy.
 type Proxy struct {
-	mode    policy.Mode
-	allow   []string
+	rules   atomic.Pointer[rules]
 	observe func(Decision)
 	ln      net.Listener
 	srv     *http.Server
@@ -71,12 +108,23 @@ type Proxy struct {
 	token   atomic.Pointer[string]
 	refused func()
 	// term, when set, says which hosts the proxy terminates TLS for.
-	term        *terminator
+	term        atomic.Pointer[terminator]
 	up          http.RoundTripper
 	upOnce      sync.Once
 	upstreamTLS *tls.Config
-	// opened are the hosts a guarded proxy reaches on this machine.
-	opened []string
+	// tunnels are the connections open through the proxy, by the decision that opened
+	// each, so a reload can close what the new policy denies.
+	tmu     sync.Mutex
+	tunnels map[*tunnel]struct{}
+}
+
+// tunnel is one open connection: the decision that opened it and the ends to close.
+type tunnel struct {
+	d     Decision
+	conns []net.Conn
+	// terminated says the proxy ends the connection's TLS itself and sets the
+	// credential for its host on the requests inside it.
+	terminated bool
 }
 
 // GuardRule is the rule a guarded proxy's denial names in its decision: not an allow
@@ -87,10 +135,16 @@ const GuardRule = "wall:own-address"
 // system's choosing on loopback.
 const Loopback = "127.0.0.1:0"
 
+// guardError is the guard's refusal at dial time, of a name that resolved to an
+// address the guard does not dial.
+type guardError struct{ msg string }
+
+func (e *guardError) Error() string { return e.msg }
+
 // Listen starts a proxy on addr, host:port, in the given mode with the given allow
-// list, handing every decision to observe. An empty addr is [Loopback]; port 0 is a
-// port of the system's choosing. Close stops it.
-func Listen(addr string, mode policy.Mode, allow []string, observe func(Decision)) (*Proxy, error) {
+// and deny lists, handing every decision to observe. An empty addr is [Loopback];
+// port 0 is a port of the system's choosing. Close stops it.
+func Listen(addr string, mode policy.Mode, allow, deny []string, observe func(Decision)) (*Proxy, error) {
 	if err := mode.Validate(); err != nil {
 		return nil, err
 	}
@@ -101,7 +155,8 @@ func Listen(addr string, mode policy.Mode, allow []string, observe func(Decision
 	if err != nil {
 		return nil, err
 	}
-	p := &Proxy{mode: mode, allow: allow, observe: observe, ln: ln}
+	p := &Proxy{observe: observe, ln: ln, tunnels: map[*tunnel]struct{}{}}
+	p.rules.Store(&rules{mode: mode, allow: allow, deny: deny})
 	gate := &gate{Listener: ln, p: p}
 	// The guard checks the address a name resolved to, at the moment of the connection,
 	// so a name that resolves to this machine is refused like the address itself.
@@ -112,9 +167,9 @@ func Listen(addr string, mode policy.Mode, allow []string, observe func(Decision
 		}
 		switch ip := net.ParseIP(host); {
 		case linkLocal(ip):
-			return fmt.Errorf("%s is a link-local address; the wall refuses it", host)
+			return &guardError{host + " is a link-local address; the wall refuses it"}
 		case own(ip) && ctx.Value(namedKey{}) == nil:
-			return fmt.Errorf("%s is this machine's own address and no allow entry names the host; the wall refuses it", host)
+			return &guardError{host + " is this machine's own address and no allow entry names the host; the wall refuses it"}
 		}
 		return nil
 	}}
@@ -167,18 +222,97 @@ func (p *Proxy) Close() error {
 }
 
 // Guard makes the proxy refuse the link-local range, and this machine's own addresses
-// unless the host is one of names: the entries of the policy's own allow list, as its
-// owner wrote them. The effective allow list does not serve, because a harness's
-// declaration narrows a *. entry to the names under it, and a name a repository
-// declared is not a name the machine's owner wrote. Entries that are *. suffixes are
-// ignored. The session runner calls Guard once, before it starts anything behind a wall.
+// unless the host is one of names: the entries of the policy's allow list, as its
+// owner wrote them. Entries that are *. suffixes are ignored. The session runner calls
+// Guard once, before it starts anything behind a wall; a policy set later brings its
+// own names.
 func (p *Proxy) Guard(names []string) {
+	r := *p.rules.Load()
+	r.opened = opened(names)
+	p.rules.Store(&r)
+	p.guarded.Store(true)
+}
+
+// opened are the entries of an allow list that name a host itself.
+func opened(names []string) []string {
+	var out []string
 	for _, n := range names {
 		if !strings.HasPrefix(n, "*.") {
-			p.opened = append(p.opened, n)
+			out = append(out, n)
 		}
 	}
-	p.guarded.Store(true)
+	return out
+}
+
+// Terminates reports whether [Proxy.Terminate] was called: whether the proxy has the
+// run's authority, without which it holds no host to paths and sets no credential.
+func (p *Proxy) Terminates() bool { return p.term.Load() != nil }
+
+// SetPolicy replaces the policy the proxy decides by: the mode, the allow list and the
+// deny list for every decision from now on, the guard's names with them when the
+// proxy is guarded,
+// and, in one step with them, the path rules and the credentials of the hosts it
+// terminates. Without a terminator, [Proxy.Terminates], paths and credentials are not
+// applied, and the caller must not pass a policy that relies on them. A tunnel open to
+// a host the new policy denies is closed, and the decisions that denied them are
+// returned, refused, for the caller to record: the caller writes the policy's own event
+// first and these after it. A terminated connection to a host whose credential is
+// another one now, or none, is closed as well and not recorded, since nothing was
+// denied: the next connection carries what the new policy selects.
+func (p *Proxy) SetPolicy(mode policy.Mode, allow, deny []string, paths map[string][]string, creds []Credential) (refused []Decision) {
+	r := &rules{mode: mode, allow: allow, deny: deny}
+	if p.guarded.Load() {
+		r.opened = opened(allow)
+	}
+	before := p.term.Load()
+	var after *terminator
+	if before != nil {
+		nt := *before
+		nt.paths, nt.creds = paths, creds
+		after = &nt
+	}
+	// The terminator first: a connection decided under the new rules finds the new
+	// credentials, never the old ones.
+	if after != nil {
+		p.term.Store(after)
+	}
+	p.rules.Store(r)
+	p.tmu.Lock()
+	open := make([]*tunnel, 0, len(p.tunnels))
+	for t := range p.tunnels {
+		open = append(open, t)
+	}
+	p.tmu.Unlock()
+	for _, t := range open {
+		d := p.decide(t.d.Method, t.d.Host, t.d.Port)
+		switch {
+		case !d.Allowed:
+			refused = append(refused, d)
+		case t.terminated && before.credentialName(t.d.Host) != after.credentialName(t.d.Host):
+		default:
+			continue
+		}
+		for _, c := range t.conns {
+			c.Close()
+		}
+	}
+	return refused
+}
+
+// track remembers an open connection until untrack.
+func (p *Proxy) track(d Decision, terminated bool, conns ...net.Conn) *tunnel {
+	t := &tunnel{d: d, conns: conns, terminated: terminated}
+	p.tmu.Lock()
+	p.tunnels[t] = struct{}{}
+	p.tmu.Unlock()
+	return t
+}
+
+// untrack forgets a connection that ended.
+func (p *Proxy) untrack(t *tunnel) {
+	p.tmu.Lock()
+	delete(p.tunnels, t)
+	p.tmu.Unlock()
 }
 
 // namedKey marks the context of a connection whose host an allow entry names itself.
@@ -187,7 +321,7 @@ type namedKey struct{}
 // named reports whether the policy's owner named the host, which alone opens this
 // machine to an enclosure, and the connection is one the allow list lets through.
 func (p *Proxy) named(host string, allowed bool) bool {
-	_, ok := policy.Match(p.opened, host)
+	_, ok := policy.Match(p.rules.Load().opened, host)
 	return ok && allowed
 }
 
@@ -214,19 +348,50 @@ func own(ip net.IP) bool {
 	return false
 }
 
-// decide applies the guard, the mode and the allow list to a host. The guard decides
-// here what it can without resolving, a literal address and localhost, so the denial is
-// in the record; a name that resolves to such an address is refused when dialled.
+// decide applies the guard, the deny list, and then the mode and the allow list to a
+// host. The guard decides here what it can without resolving, a literal address and
+// localhost, so the denial is in the record; a name that resolves to such an address
+// is refused when dialled. A host the deny list covers is denied in either mode, with
+// the entry as its rule, before the mode and the allow list are consulted. A denied
+// decision is refused; an allowed one has no outcome until it is dialled.
 func (p *Proxy) decide(method, host string, port int) Decision {
-	rule, ok := policy.Match(p.allow, host)
+	r := p.rules.Load()
+	rule, ok := policy.Match(r.allow, host)
+	d := Decision{Host: strings.ToLower(host), Port: port, Method: method, Mode: r.mode}
 	if p.guarded.Load() {
 		ip := net.ParseIP(host)
 		local := strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") || own(ip)
 		if linkLocal(ip) || (local && !p.named(host, ok)) {
-			return Decision{Host: strings.ToLower(host), Port: port, Method: method, Rule: GuardRule}
+			d.Rule, d.Outcome = GuardRule, Refused
+			return d
 		}
 	}
-	return Decision{Host: strings.ToLower(host), Port: port, Method: method, Allowed: ok || p.mode == policy.Observe, Rule: rule}
+	if denied, ok := policy.Match(r.deny, host); ok {
+		d.Rule, d.Outcome = denied, Refused
+		return d
+	}
+	d.Allowed, d.Rule = ok || r.mode == policy.Observe, rule
+	if !d.Allowed {
+		d.Outcome = Refused
+	}
+	return d
+}
+
+// failed fills in a decision whose dial or request failed: the guard's refusal at dial
+// time is a denial by the guard, a dial that failed is one, and any other failure came
+// after the dial.
+func failed(d Decision, err error) Decision {
+	var ge *guardError
+	var op *net.OpError
+	switch {
+	case errors.As(err, &ge):
+		d.Allowed, d.Rule, d.Outcome = false, GuardRule, Refused
+	case errors.As(err, &op) && op.Op == "dial":
+		d.Outcome = DialFailed
+	default:
+		d.Outcome = Connected
+	}
+	return d
 }
 
 // ServeHTTP handles one proxy request: a CONNECT, or a plain request with an
@@ -248,13 +413,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	d := p.decide("HTTP", host, port)
 	if d.Allowed {
-		if clean, rule, ok := p.term.plainPath(d.Host, r.URL.EscapedPath()); clean != "" {
+		if clean, rule, ok := p.term.Load().plainPath(d.Host, r.URL.EscapedPath()); clean != "" {
 			d.RequestMethod, d.Path, d.PathRule, d.Allowed = r.Method, clean, rule, ok
+			if !ok {
+				d.Outcome = Refused
+			}
 		}
 	}
-	p.observe(d)
 	if !d.Allowed {
-		deny(w, d, p.mode)
+		p.observe(d)
+		deny(w, d)
 		return
 	}
 	out := r.Clone(p.dialContext(r.Context(), d))
@@ -265,9 +433,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := p.transport().RoundTrip(out)
 	if err != nil {
+		d = failed(d, err)
+		p.observe(d)
+		if !d.Allowed {
+			deny(w, d)
+			return
+		}
 		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	d.Outcome = Connected
+	p.observe(d)
 	defer resp.Body.Close()
 	for k, vs := range resp.Header {
 		for _, v := range vs {
@@ -291,16 +467,13 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := p.decide(http.MethodConnect, host, port)
-	terminated := d.Allowed && p.term.covers(d.Host)
-	if !terminated {
-		// A terminated connection is recorded request by request instead.
-		p.observe(d)
-	}
 	if !d.Allowed {
-		deny(w, d, p.mode)
+		p.observe(d)
+		deny(w, d)
 		return
 	}
-	if terminated {
+	if p.term.Load().covers(d.Host) {
+		// A terminated connection is recorded request by request instead.
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			http.Error(w, "no hijack", http.StatusInternalServerError)
@@ -317,14 +490,24 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 			client.Close()
 			return
 		}
-		p.term.serve(context.WithoutCancel(r.Context()), client, d, net.JoinHostPort(host, portText))
+		t := p.track(d, true, client)
+		defer p.untrack(t)
+		p.term.Load().serve(context.WithoutCancel(r.Context()), client, d, net.JoinHostPort(host, portText))
 		return
 	}
 	upstream, err := p.dial(p.dialContext(r.Context(), d), "tcp", net.JoinHostPort(host, portText))
 	if err != nil {
+		d = failed(d, err)
+		p.observe(d)
+		if !d.Allowed {
+			deny(w, d)
+			return
+		}
 		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	d.Outcome = Connected
+	p.observe(d)
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		upstream.Close()
@@ -344,6 +527,8 @@ func (p *Proxy) connect(w http.ResponseWriter, r *http.Request) {
 		upstream.Close()
 		return
 	}
+	t := p.track(d, false, client, upstream)
+	defer p.untrack(t)
 	relay(client, upstream, buf.Reader.Buffered(), buf.Reader)
 }
 
@@ -385,14 +570,14 @@ func (p *Proxy) dialContext(ctx context.Context, d Decision) context.Context {
 }
 
 // deny answers a refused connection: 403 with one line naming the host and the mode.
-func deny(w http.ResponseWriter, d Decision, mode policy.Mode) {
+func deny(w http.ResponseWriter, d Decision) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
 	if d.Rule == GuardRule {
 		fmt.Fprintf(w, "qory: egress to %s:%d denied by the wall: link-local addresses are never reached through the proxy, and the runner's own machine only for a host the policy's allow list names\n", d.Host, d.Port)
 		return
 	}
-	fmt.Fprintf(w, "qory: egress to %s:%d denied by policy (mode %s)\n", d.Host, d.Port, mode)
+	fmt.Fprintf(w, "qory: egress to %s:%d denied by policy (mode %s)\n", d.Host, d.Port, d.Mode)
 }
 
 func portOf(text, scheme string) (int, error) {

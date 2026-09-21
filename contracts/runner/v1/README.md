@@ -15,10 +15,18 @@ module manifest, carries the group and the version together, the way a Kubernete
 object does, because the file is read on its own and its format evolves with the
 product. A document addressed by a schema URL, read or written by a program, carries an
 integer that guards its reader, because the URL already names the group and the
-generation. The policy, the webhook configuration and the descriptor are on this side:
-the objects the command hands the runner are the ones a control plane will one day
-deliver over the wire, and the compose report `qory` writes is versioned the same way. CloudEvents adds
-its own `specversion: 1.0`, which is not ours to change.
+generation. The policy, the server document, the documents a server answers and the
+descriptor are on this side: the objects the command hands the runner and the ones a
+control plane delivers over the wire, and the compose report `qory` writes is versioned
+the same way. CloudEvents adds its own `specversion: 1.0`, which is not ours to change.
+
+**Revisions.** This is `v1`, revision 1. The runner announces the revision as one
+integer: the header `X-Qory-Contract-Version: 1` on every request to the server, and
+`contract_version: 1` in the ping's data. A runner that sends neither is revision 0,
+the runners 0.1.0 to 0.3.0, which had no server. A runner on revision N knows every
+section defined up to N and ignores a section it does not know, and a server may rely
+on the sections up to N and no more. An addition is a new revision; a breaking change
+is `v2`.
 
 `v1` is the first generation of this namespace, not a stability promise. The runner
 module is at `v0`, which under Go's rules promises no compatibility, and until it
@@ -31,16 +39,18 @@ directory, `v2`, never a change in place.
 The runner's duties, in the order that matters when they conflict:
 
 1. **Policy.** The runner reads one policy document, pinned for the run, that can only
-   narrow what the binary allows: the egress mode, the allow list, the paths of a host,
-   and which of the machine's credentials the run may use. A policy that cannot be read means no run. No policy means observe
-   everything and deny nothing. Nothing in a policy grants; a stale or failed policy
-   degrades toward more restrictive, never toward more permissive.
+   narrow what the binary allows: the egress mode, the allow list, the deny list, the
+   paths of a host, and which of the machine's credentials the run may use. A policy
+   that cannot be read means no run. No policy means observe everything, with no
+   list to deny by. Nothing in a policy grants; a stale or failed policy degrades toward more
+   restrictive, never toward more permissive.
 2. **Egress.** The runner owns an HTTP proxy, on loopback or, behind a wall, on the one
    address the enclosure reaches (§The wall), and starts the session behind it.
    Every connection the session opens through the proxy is observed and recorded as one
    event: the host, the port, whether it was a `CONNECT` tunnel or a plain request, the
-   decision, and the rule that made it. In enforce mode a connection to a host outside
-   the allow list is denied. A denied attempt is recorded and the session continues; a
+   decision, and the rule that made it. A connection to a host the deny list names is
+   denied in either mode; in enforce mode a connection to a host outside the allow
+   list is denied as well. A denied attempt is recorded and the session continues; a
    denial never ends a run.
 3. **Credentials.** The session holds none of the runner's. On a developer machine the
    session runs with the developer's own environment. Behind a wall the runner holds the
@@ -50,7 +60,8 @@ The runner's duties, in the order that matters when they conflict:
 4. **Liveness.** A heartbeat while the session runs; the exit as the result.
 5. **Reporting.** The session's terminal bytes as log chunks, the runner's observations
    as events, the runtime's own output mapped to session events by a descriptor. Every
-   event goes to files. When a webhook is configured, every event goes there too. When
+   event goes to files. When a server is configured, every event its configuration
+   names goes there too. When
    the caller gives a stream, standard output say, every event goes there as well, the
    line `events.jsonl` holds; that is how a run with no receiver is followed.
 6. **The harness reports over a local socket**, never over a network. A hook the
@@ -94,7 +105,7 @@ Stated so a receiver reads the record for what it is.
   in the repository's configuration hands the token in with the workspace. The run
   directory is shown read-only, so the agent cannot change `events.jsonl`; when it lies
   inside the workspace the agent can still rename the directory above it, which moves
-  the record and does not alter it. The webhook's copy is out of reach either way.
+  the record and does not alter it. The server's copy is out of reach either way.
 - Behind a wall the exit status is the adapter's command's. With Docker that is the
   runtime's status, except that `125` is the engine failing to start the container,
   `126` and `127` the program not being startable in the image, and a runtime killed by
@@ -114,30 +125,36 @@ Stated so a receiver reads the record for what it is.
   and the egress record are the runner's own and are always there.
 - A descriptor matches and copies. It never computes, so a mapping that needs a program
   is a runner change, never a configuration change.
-- The receiver is trusted with what it is sent. The webhook's secret proves the sender
-  to the receiver; nothing proves the receiver to the sender beyond TLS.
+- The server is trusted with what it is sent. The secret proves the runner to the
+  server; nothing proves the server to the runner beyond TLS.
 
 ## Sequence
 
-One run, on a developer machine, with a webhook configured:
+One run, on a developer machine, with a server configured:
 
 1. The runner is given a launch spec: the program, its arguments, its environment and
-   directory, whether the session is interactive, the policy document, the webhook
-   configuration, the egress the harness declared, and the runtime name. The spec comes
-   from the `qory` command, which read the policy and the webhook from its own
+   directory, whether the session is interactive, the policy document, the server
+   document, the egress the harness declared, and the runtime name. The spec comes
+   from the `qory` command, which read the policy and the server from its own
    configuration; the runner knows nothing of what composed it or where it was read.
 2. The runner makes a run id, a UUID version 7, and the run directory
    `.qory/runs/<id>/` in the checkout.
-3. It validates the policy once. Refused by the schema: the run does not start. Absent:
-   mode `observe`, everything allowed and recorded. Present: pinned, with the digest of
-   its canonical JSON as its stamp. The effective allow list is the policy's entries,
-   or, when the harness declared egress, the declared entries the policy covers (§The
-   policy).
-4. It validates the webhook configuration once, when one is given. It posts one
-   `ai.qory.ping` and waits for a 2xx. Anything else, or no answer, means the run does
+3. It validates the server document once, when one is given, and fetches the server's
+   configuration document with a signed `GET` (§The server). It posts one
+   `ai.qory.ping` to the events URL the document names and waits for a 2xx. A fetch
+   that fails, a document the schema refuses, or a ping not accepted means the run does
    not start: a run someone asked to have observed is not run unobserved by accident.
-   The `--local` flag of the command runs with the file sink alone. With no webhook
-   configured there is no ping and the run starts at once, files only.
+   The `--local` flag of the command runs with the file sink alone and contacts no
+   server. With no server configured there is no fetch and no ping, and the run starts
+   at once, files only.
+4. It settles the policy. When the server's configuration names a `run` section, it
+   fetches the run configuration, with the run's `forge` and `repository` labels as
+   the query, and its `security_policy` is the policy; anything but `200` is no run.
+   Otherwise the policy is the one the command gave. It validates the policy once.
+   Refused by the schema: the run does not start. Absent: mode `observe`, everything
+   allowed and recorded. Present: pinned, with the digest of its canonical JSON as its
+   stamp. The allow list and the deny list are the policy's entries; the hosts the
+   harness declared are reported and decide nothing (§The policy).
 5. It starts the proxy on a loopback port and sets `HTTP_PROXY`, `HTTPS_PROXY` and
    `NO_PROXY` in the session's environment, in upper and lower case, with
    `NO_PROXY=localhost,127.0.0.1,::1` so a local MCP server or model endpoint still
@@ -149,13 +166,15 @@ One run, on a developer machine, with a webhook configured:
    `settings.json` in the run directory and named in its place. What is prepared goes
    into the run directory; the composed home is not modified.
 7. It emits `ai.qory.run.started` and `ai.qory.run.policy_applied`, then starts the
-   program: on a pseudo-terminal when interactive, on pipes otherwise.
-8. While the program runs: every chunk of output is one `ai.qory.run.log`; every
-   connection through the proxy is one `ai.qory.run.egress`; every record the descriptor
-   matches is one session event; every thirty seconds one `ai.qory.run.heartbeat`.
+   program: on a pseudo-terminal when the caller is interactive and no argument the
+   descriptor names as headless is among the runtime's, on pipes otherwise.
+8. While the program runs: every chunk of output is one `ai.qory.run.log`; on a
+   pseudo-terminal every resize is one `ai.qory.run.resized`; every connection through
+   the proxy is one `ai.qory.run.egress`; every record the descriptor matches is one
+   session event; every thirty seconds one `ai.qory.run.heartbeat`.
 9. The program exits. The runner drains the socket, so a hook on the runtime's last
    event is still read, emits `ai.qory.run.exited`, gives the sinks fifteen seconds to
-   flush, reports what the webhook did not accept, and returns the program's exit
+   flush, reports what the server did not accept, and returns the program's exit
    status. A runtime killed by a signal exits as `-1` with the signal named.
 
 A run may have a time limit. When the runtime still runs at the limit the runner stops
@@ -195,8 +214,8 @@ environment, with the run id it already holds; everything after is one code path
 `policy.schema.json`. The document the command hands the runner, from the machine's
 own configuration, never from inside the checkout, where the agent it constrains could
 write it: for `qory`, the `egress` section of `~/.config/qory/runner.yaml`. The same
-document a run start answer will carry once a control plane exists, so nothing is
-designed twice.
+document a server's run configuration carries as `security_policy` (§The server), so
+nothing is designed twice.
 
 ```yaml
 version: 1
@@ -206,33 +225,39 @@ egress:
     - api.anthropic.com
     - github.com
     - "*.github.com"           # every host below github.com; not github.com itself
+  deny:
+    - gist.github.com          # denied in either mode, whatever allow says
 ```
 
 | Field | Meaning |
 |---|---|
 | `version` | `1`. A runner refuses a version it does not read, naming it |
-| `egress.mode` | `observe`: every connection is allowed and recorded. `enforce`: a connection to a host outside `allow` is denied and recorded |
+| `egress.mode` | `observe`: every connection is recorded, and only a host `deny` names is denied. `enforce`: a connection to a host outside `allow` is denied as well, and recorded |
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. Absent is empty, and `enforce` with an empty list reaches nothing |
+| `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, whatever `allow` says, and the entry is the rule reported. Absent is empty |
 | `egress.paths` | by host, in `allow`'s grammar, the paths the session may ask of it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. An empty list is no path at all |
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say. A policy defines none (§Credentials) |
 
-**Narrowing.** The harness compose reports the hosts its modules declared. The command
-hands that list to the runner, and the effective allow list is the declared entries the
-policy covers: a name is covered by the same name or by a suffix pattern above it, a
-pattern is covered by the same pattern or by a suffix pattern above it. A declared host
-the policy does not cover is dropped, and `ai.qory.run.policy_applied` records both
-lists. No declaration and an empty declaration are different things: a harness in which
-no module declares egress hands over no list, and the policy's list is the effective
-list; a harness whose modules declare, and between them name no host, hands over an
-empty list, and `enforce` reaches nothing. The policy is the ceiling; a declaration can
-only lower it. The grammar of a declared host is that of `egress.allow`, defined here
-once; the harness contract copies it and cites this document.
+**The harness's declared hosts.** The harness compose reports the hosts its modules
+declared, the command hands that list to the runner, and `ai.qory.run.policy_applied`
+reports it as `harness_hosts`; it decides nothing. The policy alone decides: `allow` is
+the policy's list, a declared host the policy does not cover is denied under `enforce`
+like any other, and one `deny` names is denied in either mode. The grammar of a declared
+host is that of `egress.allow`, defined here once; the harness contract copies it and
+cites this document.
 
 **Matching a connection.** The host of a `CONNECT` request is its authority; the host of
 a plain request is the authority of its absolute-form target, never its `Host` header.
-Host names are compared lower-case; an IP literal matches only an identical entry. The
-first entry that matches is the rule reported. A denial is a `403 Forbidden` with a
-one-line text body naming the host and the mode; a tunnel is never opened for it.
+Host names are compared lower-case; an IP literal matches only an identical entry.
+`deny` is decided first: when an entry of it covers the host, the connection is denied
+in either mode and that entry is the rule reported; only then `allow` and the mode
+decide. `deny` beats `allow` whatever the shapes: `allow: ["*.example"]` with
+`deny: ["tracker.example"]` denies `tracker.example` and reaches `api.example`, and a
+host both lists name is denied. A denied host is never reached, so its paths and a
+credential for it never apply; the guard of a walled proxy (§The wall) decides before
+either list. In each list the first entry that matches is the rule reported. A denial
+is a `403 Forbidden` with a one-line text body naming the host and the mode; a tunnel
+is never opened for it.
 
 **Matching a path.** On a terminated host every request is decided, by the policy's
 paths for the host and by the paths of the credential that is for it, and it passes
@@ -355,11 +380,12 @@ The types, one namespace. The runner's own:
 
 | Type | When | Data |
 |---|---|---|
-| `ai.qory.ping` | before the runtime starts, to the webhook only, when one is configured | `runner_version`, `events` |
-| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
-| `ai.qory.run.policy_applied` | right after, once | `mode`, `allow`, `source`, `digest`, `declared`, and with them set `paths`, `credentials`, `terminated` |
-| `ai.qory.run.log` | one per chunk of output: one line or 4096 bytes, whichever comes first | `stream`, `bytes` |
-| `ai.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request | `host`, `port`, `method`, `decision`, `mode`, `rule`, and per request `request_method`, `path`, `path_rule`, `credential` |
+| `ai.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version` |
+| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
+| `ai.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration took effect | `mode`, `allow`, `deny`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `terminated` |
+| `ai.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
+| `ai.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size took effect; never on pipes | `cols`, `rows` |
+| `ai.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_method`, `path`, `path_rule`, `credential` |
 | `ai.qory.run.heartbeat` | every `interval_seconds` while the runtime runs | `elapsed_seconds`, `interval_seconds` |
 | `ai.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
 
@@ -406,79 +432,205 @@ what each holds. Values are copied from the runtime unchanged: `input` and `resp
 have the shape the tool gave them, `error` is display text, and the enumerations in
 `source`, `reason`, `kind`, `outcome` are the runtime's words.
 
+`ai.qory.run.policy_applied` says where the policy came from: `source` is `none`,
+`config` or `fetched`; `url` is where a fetched one was fetched from; `digest` is the
+runner's own hex sha256 of the policy document's canonical JSON, with `config` and
+`fetched`; `run_configuration` is the server's digest of the run configuration document
+as its header carried it, with `fetched`; `allow` and `deny` are the policy's two lists
+as written, `deny` the hosts denied by name in either mode. `ai.qory.run.egress` says
+what became of the connection in `outcome`: `connected`, the dial succeeded;
+`dial_failed`, allowed and the dial failed; `refused`, not dialled, because the policy
+or the wall's guard denied it, or closed by a reload.
+
 The log is an event like the others. `bytes` is base64 of the chunk as the runtime
-wrote it, terminal escapes included; a chunk is cut at a line break or at 4096 bytes and
-never at a character boundary, so a multibyte character may straddle two chunks and the
-concatenation, not a chunk, is text. On a pseudo-terminal `stream` is `terminal`; on
-pipes the runtime's standard output and standard error are chunked apart.
+wrote it, terminal escapes included. On pipes the runtime's standard output and standard
+error are chunked apart, `stream` is `stdout` or `stderr`, and a chunk is cut at a line
+break or at 4096 bytes, whichever comes first, at a byte and not at a character: a
+multibyte character may straddle two chunks, and the concatenation, not a chunk, is
+text. On a pseudo-terminal `stream` is `terminal` and a line break cuts nothing: a
+full-screen program redraws on every keypress, and cut at line breaks its record is
+thousands of chunks of a few bytes. A terminal chunk is cut at 4096 bytes or once the
+runtime has written nothing for 50 ms after its last write, whichever comes first, so
+one redraw is one chunk, and never inside a multibyte character, so a chunk of UTF-8
+output is text on its own. A stream that never pauses is cut at 4096 bytes; what is held
+when the runtime exits is the last chunk.
+
+A replay lays the redraws of a full-screen program over each other, which takes the
+terminal's size, so the size is in the record. On a pseudo-terminal
+`ai.qory.run.started` carries `terminal`, the columns and rows the runtime started on:
+the runner's own terminal's when it has one, 80 by 24 otherwise. Each later change is
+one `ai.qory.run.resized` with the new size, at the sequence where it took effect: what
+the gap still held is cut before it, so the chunks before it were written to a terminal
+of the old size and the chunks after it to one of the new. On pipes there is no
+`terminal` and no resize.
 
 ## The record files
 
 `.qory/runs/<id>/` in the checkout, kept out of git by the compose:
 
 - `events.jsonl`: every event of the run, one per line, in sequence order, the ping
-  included when one was sent. The record of truth; the webhook is a copy.
+  included when one was sent. The record of truth; the server's is a copy.
 - `output.log`: the raw bytes of the session's output, the concatenation of the
   `ai.qory.run.log` chunks. Both files tail.
 - `settings.json`: the runtime's settings with the runner's hooks added, when hooks
   were installed.
-- `undelivered/`: the batches the webhook did not accept, when there were any.
+- `undelivered/`: the batches the server did not accept, when there were any.
 
 `fixtures/run/<id>/` is one such directory, recorded. The control plane's CI replays it.
 
-## The webhook
+## The server
 
-`webhook.schema.json`. The document the command hands the runner, from the machine's
-own configuration: for `qory`, the `webhook` section of `~/.config/qory/runner.yaml`.
-Configuring one makes the run fail closed on the ping.
+`server.schema.json`. The document the command hands the runner, from the machine's
+own configuration: for `qory`, the `server` section of `~/.config/qory/runner.yaml`,
+with the secret from `QORY_SERVER_SECRET` when the file does not hold it. The runner is
+a client of the server named here and of nothing else: it fetches the server's
+configuration, posts its events where that says, and takes the run's policy from the
+server when the server offers one. A server is a control plane, or a plain receiver
+that implements this section: discovery and the events endpoint are enough.
+Configuring one makes the run fail closed on the discovery fetch and on the ping.
 
 ```yaml
 version: 1
-url: https://receiver.example/qory/events
-secret: ...                    # at least 16 characters; shared with the receiver alone
-events:                        # absent: every type
-  - ai.qory.run.started
-  - ai.qory.run.egress
-  - ai.qory.run.exited
+url: https://qory.example            # https, or http to a loopback address; scheme and host[:port] only
+access_key: ak_f1xt0re000000000       # ak_ and 16 lower-case Crockford base32 characters
+secret: fixture-secret-not-a-real-one # at least 16 characters; signs, never travels
 ```
 
-`url` is `https`, or `http` to a loopback address for a receiver on the same machine.
-The secret lives outside any repository, in the machine's configuration or its
-environment; it is never a fixture, never in a checkout, never in an event. `events` filters by full type name,
-`*` for all; the ping is always sent.
+`url` is the server's origin and nothing after it: no path, no query, no fragment. The
+runner finds every endpoint through the configuration document under it. The access key
+names the runner to the server and travels in clear on every request; the secret signs
+and never travels. The pair follows the model of an AWS access key id and its secret
+key. The secret lives outside any repository, in the machine's configuration or its
+environment; it is never in a checkout and never in an event, and the only one in a
+fixture is the published test secret, `fixture-secret-not-a-real-one`, under the
+published key `ak_f1xt0re000000000`.
 
-**Delivery**, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers).
-One `POST` per batch:
+**On every request** to the server:
+
+| Header | Value |
+|---|---|
+| `User-Agent` | `qory-runner/<version>` |
+| `X-Qory-Access-Key` | the access key |
+| `X-Qory-Contract-Version` | the revision of this contract the runner implements, `1` |
+
+**A signed POST**, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers).
+One `POST` per batch to the events URL, with the headers above and:
 
 | Header | Value |
 |---|---|
 | `Content-Type` | `application/cloudevents-batch+json` |
-| `User-Agent` | `qory-runner/<version>` |
 | `X-Qory-Delivery` | a UUID per batch. A retry of the same batch carries the same id |
-| `X-Qory-Signature-256` | `sha256=` followed by the hex HMAC SHA-256 of the raw request body, keyed with the secret |
+| `X-Qory-Signature-256` | `sha256=` and the lower-case hex HMAC SHA-256 of the raw request body, keyed with the secret |
+| `X-Qory-Run-Configuration` | the server's digest of the run configuration the run holds, `sha256=<hex>`, when it holds a fetched one; absent otherwise |
 
-The body is a `batch.schema.json` document: a JSON array of events of one run, in
-sequence order, never empty. The runner cuts a batch at one hundred events, at one
-mebibyte, or after one second since its first event, whichever comes first; the ping is
-a batch of one, sent before anything else. A receiver verifies the signature over the
-raw bytes with a constant-time comparison before parsing, then deduplicates on each
-event's `id`, since delivery is at least once.
+No timestamp is signed on a POST and no replay window is checked: a replayed batch is
+a duplicate the receiver already discards by event id.
 
-The receiver answers with a status; the body is ignored:
+**A signed GET**, for the configuration document and the run configuration:
+
+| Header | Value |
+|---|---|
+| `X-Qory-Timestamp` | Unix seconds, UTC, a decimal integer |
+| `X-Qory-Signature-256` | `sha256=` and the lower-case hex HMAC SHA-256 of the canonical string, keyed with the secret |
+
+The canonical string is three lines joined by `\n`, with no newline after the last: the
+method in upper case; the request target exactly as sent, the path and then `?` and
+the query only when the query is non-empty, nothing decoded, re-ordered or normalised
+on either side; the timestamp as sent. The server accepts the request when
+`|server now - timestamp| <= 300` seconds, earlier or later alike. The canonical string
+follows AWS Signature Version 4, reduced to what a request here has. Two known
+answers:
+
+- secret `test-secret`, canonical string `GET\n/.well-known/qory-configuration?x=1\n1700000000`:
+  `sha256=e8cc6260e2740e9282f2b45fa8bc590e3afe0e59eb53882b19cdb0f87a613c02`
+- the published secret, canonical string `GET\n/.well-known/qory-configuration\n1700000000`:
+  `sha256=0c895b2f1c1c62629e6298a59746b975ccae2e5156b01f733d2d7768f6eb55a2`
+
+**Failure.** Every authentication failure is `401` with the body
+`{"error":"unauthorized"}` and nothing more: a header missing or empty, a key of the
+wrong shape, a key the server does not know or has revoked, a timestamp that is not an
+integer, a stale timestamp, a signature that does not match. The body never says which.
+A header sent twice is refused. The server verifies with a constant-time comparison,
+looks the key up only after its shape is checked, and logs nothing about the headers.
+A redirect is not followed: a 3xx is a status like any other.
+
+**The configuration document.** `configuration.schema.json`. A signed
+`GET <url>/.well-known/qory-configuration`, the path after OpenID Connect discovery. The
+answer is `200`, `application/json`, with the header `X-Qory-Configuration:
+sha256=<hex>`, the server's digest of the document: opaque to the runner, which
+compares it byte for byte and never recomputes it.
+
+```json
+{"version": 1,
+ "events": {"url": "https://qory.example/v1/events", "types": ["*"]},
+ "run": {"url": "https://qory.example/v1/run-configuration"}}
+```
+
+`version` and `events` are required. `events.url` is `https`, or `http` to a loopback
+address; `events.types` is a non-empty list of full type names, or `*` for every type,
+and the ping is always sent. `run` is optional: a server that names no `run` section
+offers no run configuration, and the policy is the machine's. A top-level member the
+runner does not know is ignored, which is how a later revision adds a section.
+
+**The run configuration document.** `run-configuration.schema.json`. A signed
+`GET <run.url>?forge=<forge label>&repository=<repository label>`, each parameter only
+when the run has that label and no query when it has neither, the values
+percent-encoded as a query is. The answer is `200`, `application/json`, with the
+headers `X-Qory-Run-Configuration: sha256=<hex>` and `ETag: "sha256=<hex>"`, the same
+string, quoted the second time.
+
+```json
+{"version": 1,
+ "security_policy": {"version": 1, "egress": {"mode": "enforce", "allow": ["api.example"]}}}
+```
+
+`version` and `security_policy` are required; `security_policy` is a
+`policy.schema.json` document, and it is the policy: the runner does not merge it with
+the machine's or with the run's own. A member the runner does not know is ignored. The
+digest is the server's and opaque; the runner keeps it, sends it back on every POST,
+and never recomputes it. Anything but `200`, or a document the schema refuses, is no
+run.
+
+**Delivery.** The body of a POST is a `batch.schema.json` document: a JSON array of
+events of one run, in sequence order, never empty. The runner cuts a batch at one
+hundred events, at one mebibyte, or after one second since its first event, whichever
+comes first; the ping is a batch of one, sent before anything else. A receiver verifies
+the signature over the raw bytes with a constant-time comparison before parsing, then
+deduplicates on each event's `id`, since delivery is at least once.
+
+The server answers with a status; the body is ignored:
 
 | Status | Meaning |
 |---|---|
 | 2xx | accepted; the runner forgets the batch |
-| 410 | stop: the receiver wants nothing more for this run. The runner sends no further batch and the run continues on the file sink |
+| 410 | stop: the server wants nothing more for this run. The runner sends no further batch and the run continues on the file sink |
 | anything else, or no answer within ten seconds | retried with exponential backoff, one second doubling to one minute, until the run ends |
+
+Every answer may carry `X-Qory-Configuration` and `X-Qory-Run-Configuration`, the
+digests in force: of the configuration document, and of the run configuration for the
+run's repository. The runner compares each to what it holds. A different
+run-configuration digest means fetch the run configuration again and apply it; a
+different configuration digest means fetch the configuration document again and use
+its sections from then on, the events URL and the filter for the batches after. A
+header absent means nothing. This is how a control plane changes a run's policy while
+it runs, and the whole of it: nothing in an answer's body is read.
+
+**Reload**, when a fetched run configuration replaces the one in force, three rules:
+
+1. The new policy takes effect for new connections at once, and the record gets a
+   second `ai.qory.run.policy_applied`, with the new digests, at the sequence where it
+   took effect.
+2. A tunnel open to a host the new policy denies is closed by the proxy and recorded as
+   a denied `ai.qory.run.egress` with `outcome: refused` and the rule that denied it.
+3. A host the new policy terminates TLS for is terminated on its next connection.
 
 What is still undelivered when the run ends is spooled to `.qory/runs/<id>/undelivered/`
 as batch files with their delivery ids, and the runner reports the count on its standard
-error. The file sink has every event regardless. The webhook never delays the session:
+error. The file sink has every event regardless. The server never delays the session:
 posting is asynchronous behind a bounded queue, and a queue that fills spools to the
 same directory rather than blocking the runtime.
 
-**After a runner that died.** The run directory says what the receiver is still owed
+**After a runner that died.** The run directory says what the server is still owed
 without the runner that wrote it. `events.jsonl` is written as events happen.
 `delivered.log` beside it gets a line as each batch is accepted, the delivery id and the
 sequence of every event in it, and the one word `stopped` for a 410. `lock` is held by
@@ -487,34 +639,52 @@ however it went. Sending a run again is the job's last step, whatever happened b
 it: refused while the lock is held; then what the run's wall left behind is removed, by
 the run's label; a record with no `ai.qory.run.exited` gets one, numbered on from the
 last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`; and every
-event the webhook's filter wants that no accepted batch named is posted, in order, in
-batches cut the same way, until accepted or given up on. What is still not accepted is
-under `undelivered/` again. A receiver sees some events twice when the runner died
-between an answer and its line, and discards them by `id` as ever. Nothing of this
-recovers a machine that died: the record went with it, and a receiver learns of that
-from heartbeats that stop.
+event the server's filter wants that no accepted batch named is posted, in order, in
+batches cut the same way, until accepted or given up on. The resend fetches the
+configuration document first, as a run does, and posts where it says. What is still
+not accepted is under `undelivered/` again. A receiver sees some events twice when the
+runner died between an answer and its line, and discards them by `id` as ever. Nothing
+of this recovers a machine that died: the record went with it, and a receiver learns of
+that from heartbeats that stop.
 
-No timestamp is signed and no replay window is checked: a replayed batch is a duplicate
-the receiver already discards by event id, and the secret is the only credential.
-Stripe's signed timestamp and the Standard Webhooks headers were considered and set
-aside for that reason.
+**The modes of a run:**
 
-**A worked example** of these rules is `internal/receiver` in this module: a handler
-that verifies the signature, deduplicates and appends to a file, which the module's tests
-run the webhook sink against. It is not a public package and no command ships it; a
-receiver written by anyone else follows this section, and may read that code.
+| The runner is given | Events go to | The policy comes from |
+|---|---|---|
+| nothing | files only | the machine's policy the command gave (`egress`), else observe everything |
+| a server | the server's `events.url`, after a signed discovery fetch and a ping | the server's run configuration when it names one, else the machine's policy |
+| a server and `--local` | files only; the server is not contacted | the machine's policy |
+
+A discovery fetch that fails, in transport, with a status other than `200` or with a
+document the schema refuses, or a ping not accepted: no run, and the error names the
+URL and the status. A `run` section named and not answering `200`: no run. The
+command's `--policy`, a run's own policy under the machine's, keeps its meaning without
+a server; with a fetched run configuration the fetched policy is the policy, and
+`--policy` is refused with a sentence saying so.
+
+**The reference receiver** is the public package `receiver` of this module: a handler
+that serves discovery, verifies each request as this section says, answers the digest
+headers, deduplicates and appends to a file. The module's own tests run the runner's
+client against it. `fixtures/signed/` is what any receiver is tested against: one
+request per file, `method`, `target`, `headers`, `body` (a string, or `null` for a
+GET), the status a receiver answers as `expect`, and a `note` saying why. Every
+signature in them is real, under the published key and secret, and the timestamps are
+around `1700000000`, where a receiver under test sets its clock. A receiver written by
+anyone else follows this section, replays those files, and may read that code.
 
 ## The runtime
 
 The runner starts a program, records it and stops it, and knows no program. What is
 particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
 enclosure is behind `wall.Wall`, and Claude Code is one implementation of it among the
-ones there may be. A runtime answers five things: its name and the version of the
+ones there may be. A runtime answers six things: its name and the version of the
 program it was written against, reported in `ai.qory.run.started`; how a launch is
 prepared so the program reports to the runner, which may change the arguments, add
 variables and write into the run directory and nothing else; whether the program's
-standard output is records to read; what event, if any, one record is; and how the
-program is asked to leave, a signal and a grace.
+standard output is records to read; what event, if any, one record is; how the
+program is asked to leave, a signal and a grace; and whether the arguments it is
+started with mean it runs without an interface, so the session is on pipes whatever
+the caller has.
 
 There are three ways to a runtime, and a name resolves to the first that applies:
 
@@ -535,7 +705,7 @@ events and that each passes this contract's schema.
 
 ### The descriptor
 
-`descriptor.schema.json`. One YAML file per runtime. It has four parts.
+`descriptor.schema.json`. One YAML file per runtime. It has five parts.
 
 **Sources**: how the runner attaches. The terminal bytes always, with nothing to match
 in them and so no source. `output`: JSON lines on the runtime's standard output, when the
@@ -560,6 +730,16 @@ a bounded expression language, and before that a runner change.
 
 **Stop**, optional: `signal`, one of the six above, and `grace`, a duration. It is how a
 runtime that closes its session on one signal and drops it on another says which.
+
+**Headless**, optional: `args`, the arguments that mean the runtime runs without an
+interface. When one of them is among the arguments the runtime is started with, the
+session runs on pipes even at a terminal, exactly as if the caller had asked for that:
+the runtime is recorded as not interactive, and the descriptor's `output` source is read.
+A short argument matches the whole token (`-p`); a long one matches the token or its
+`--name=value` form (`--print`, `--print=…`). Nothing else is inferred: a runtime that
+takes its prompt on standard input, say, has no argument to name, and a caller says
+headless itself. Absent, the caller alone decides. Runtimes differ in how they say "no
+interface", which is why the descriptor defines the inference and not the command.
 
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
 the shape of `record.schema.json`, beside `expected/events.jsonl`, one `{type, data}`
@@ -593,7 +773,7 @@ the descriptor's rules. The socket is removed when the run ends.
 A wall is what makes a connection around the proxy fail. It is optional: with none, the
 runtime is a process of the machine and enforcement is cooperative (§Limits). With one,
 the runtime runs in an **enclosure** and the session runner stays outside it with the
-proxy, the policy and the webhook's secret; the record is written from outside, and the
+proxy, the policy and the server's secret; the record is written from outside, and the
 enclosure sees the run directory read-only. A wall is built by an adapter,
 one per container interface; the contract names no tool in its rules and states one list
 for all of them.
@@ -676,9 +856,12 @@ builds none.
 
 | Directory | Holds | Validated against |
 |---|---|---|
-| `fixtures/policy/` | policy documents that are accepted | `policy.schema.json` |
-| `fixtures/webhook/` | webhook configurations that are accepted; the secrets are synthetic | `webhook.schema.json` |
+| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list | `policy.schema.json` |
+| `fixtures/server/` | server documents that are accepted, with the published key and secret | `server.schema.json` |
+| `fixtures/configuration/` | configuration documents a server answers: events only, with a run section, with a section this revision does not know | `configuration.schema.json` |
+| `fixtures/run-configuration/` | run configuration documents a server answers | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: the ping, a first batch | `batch.schema.json` |
+| `fixtures/signed/` | signed requests, one per file, under the published key and secret, with the status a receiver answers | the receiver, replaying each with its clock at `1700000000` |
 | `fixtures/run/<id>/` | one recorded run: `events.jsonl` and `output.log` | `event.schema.json` per line, plus the sequence, source and concatenation rules |
 | `fixtures/invalid/` | documents each schema refuses, named `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
@@ -698,7 +881,9 @@ Public sources this contract was written from, and nothing else:
   [JSON schema](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/formats/cloudevents.json),
   vendored unchanged as `cloudevents.schema.json` under its Apache License, Version 2.0.
 - HTTP: [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html) §9.3.6 for `CONNECT`,
-  §15.5.4 for 403 and §15.5.8 for why not 407; [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112.html)
+  §15.5.4 for 403 and §15.5.8 for why not 407, §10.1.5 for `User-Agent`, §8.8.3 for
+  `ETag`, §15.3.3, §15.5.2 and §15.5.11 for 202, 401 and 410;
+  [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112.html)
   §3.2 for the absolute-form target a proxy receives. UUID version 7 from
   [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562.html).
 - The proxy variables: [curl's environment](https://curl.se/docs/manpage.html#ENVIRONMENT),
@@ -727,9 +912,12 @@ Public sources this contract was written from, and nothing else:
   JSON lines of `--output-format stream-json`; the [sessions page](https://code.claude.com/docs/en/sessions)
   for the statement that the transcript format is internal, which is why no descriptor
   reads it.
-- Webhooks: GitHub's [delivery headers](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers),
+- The server: [RFC 2104](https://www.rfc-editor.org/rfc/rfc2104.html) for HMAC;
+  [AWS Signature Version 4](https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html),
+  the model for the access key and secret pair and for a canonical string signed with a
+  timestamp; [OpenID Connect Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html)
+  §4, the model for a configuration document under `/.well-known/`; GitHub's
+  [delivery headers](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers),
   [signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
   and [best practices](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks),
-  the model for the headers, the HMAC and the ten-second answer; [Stripe's signed
-  timestamp](https://docs.stripe.com/webhooks) and [Standard Webhooks](https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md),
-  the alternatives set aside.
+  the model for the delivery headers, the HMAC over the body and the ten-second answer.

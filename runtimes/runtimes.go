@@ -13,6 +13,7 @@ package runtimes
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/qoryai/runner/internal/descriptor"
@@ -40,6 +41,11 @@ type Runtime interface {
 	// Stop is how the program is asked to leave. A run that names its own signal or
 	// grace overrides it.
 	Stop() Stop
+	// Headless reports whether the arguments the program is started with mean it runs
+	// without an interface, so the session runs on pipes even at a terminal, exactly
+	// as if the caller had asked for that. A runtime that names no such argument
+	// reports false, and the caller alone decides.
+	Headless(args []string) bool
 }
 
 // Launch is what is started: the program, its arguments, and variables for its
@@ -113,6 +119,9 @@ func (bare) Map(Record) (string, map[string]any, bool) { return "", nil, false }
 // Stop is the runner's defaults.
 func (bare) Stop() Stop { return Stop{} }
 
+// Headless is false: nothing is known of the arguments.
+func (bare) Headless([]string) bool { return false }
+
 // Described is the runtime a descriptor describes. name names the document in messages
 // and says by its extension whether it is YAML or JSON; the document is checked against
 // the contract's schema. installers are the ones the descriptor may name; one it names
@@ -137,13 +146,17 @@ func Described(name string, document []byte, installers map[string]Installer) (R
 			}
 		}
 	}
+	if h := d.Headless; h != nil {
+		r.headless = h.Args
+	}
 	return r, nil
 }
 
 type described struct {
-	d       *descriptor.Descriptor
-	install Installer
-	stop    Stop
+	d        *descriptor.Descriptor
+	install  Installer
+	stop     Stop
+	headless []string
 }
 
 // Name is the descriptor's runtime.
@@ -157,6 +170,30 @@ func (r *described) ReadsOutput() bool { return r.d.Sources.Output != nil }
 
 // Stop is the descriptor's stop section.
 func (r *described) Stop() Stop { return r.stop }
+
+// Headless reports whether one of the arguments the descriptor's headless section names
+// is among args.
+func (r *described) Headless(args []string) bool { return namesHeadless(r.headless, args) }
+
+// namesHeadless is the matching rule: a short argument, one dash, matches a token
+// that is exactly it; a long one, two dashes, matches the token or the token up to an
+// equals sign, its --name=value form. Tokens are compared one by one and no flag
+// grammar is parsed: which tokens are values of the flags before them is the program's
+// to know, and the runner does not guess at it, so a value that happens to spell a
+// named argument counts as one.
+func namesHeadless(named, args []string) bool {
+	for _, arg := range args {
+		for _, n := range named {
+			if arg == n {
+				return true
+			}
+			if strings.HasPrefix(n, "--") && strings.HasPrefix(arg, n+"=") {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Prepare has the installer the descriptor names install the forwarder for the events
 // it lists, when it has a hooks source and the run a forwarder.
