@@ -20,9 +20,9 @@ descriptor are on this side: the objects the command hands the runner and the on
 control plane delivers over the wire, and the compose report `qory` writes is versioned
 the same way. CloudEvents adds its own `specversion: 1.0`, which is not ours to change.
 
-**Revisions.** This is `v1`, revision 2. The runner announces the revision as one
-integer: the header `X-Qory-Contract-Version: 2` on every request to the server, and
-`contract_version: 2` in the ping's data. A runner that sends neither is revision 0,
+**Revisions.** This is `v1`, revision 1. The runner announces the revision as one
+integer: the header `X-Qory-Contract-Version: 1` on every request to the server, and
+`contract_version: 1` in the ping's data. A runner that sends neither is revision 0,
 the runners 0.1.0 to 0.3.0, which had no server. A runner on revision N knows every
 section defined up to N and ignores a section it does not know, and a server may rely
 on the sections up to N and no more. An addition is a new revision; a breaking change
@@ -30,8 +30,11 @@ is `v2`. What each revision added:
 
 | Revision | Runner | Adds |
 |---|---|---|
-| 1 | 0.4.0 | the server (§The server): discovery, signed requests, the run configuration fetched with the run's `forge` and `repository` labels as its query, the digests and the reload |
-| 2 | 0.5.0 | the run configuration request carries every label of the run as its query, not two of them (§The server, the run configuration document) |
+| 1 | 0.4.0 | the server (§The server): discovery, signed requests, the run configuration fetched with the run's labels as its query, the digests and the reload |
+
+Revision 1 was amended in place in 0.5.0, before any server relied on it: the run
+configuration request carries every label of the run, where 0.4 sent `forge` and
+`repository` alone.
 
 `v1` is the first generation of this namespace, not a stability promise. The runner
 module is at `v0`, which under Go's rules promises no compatibility, and until it
@@ -589,9 +592,9 @@ form is, a space as `+`, so a run labelled `forge: github.com`, `issue: "77"` an
 `repository: acme/shop` fetches `<run.url>?forge=github.com&issue=77&repository=acme%2Fshop`.
 When `run.url` has a query of its own, the labels are added to it, and a label replaces
 a parameter of the same name. The server decides which labels name what the run works
-on and answers the policy for that; the runner reads nothing into them. A revision 1
-runner sent `forge` and `repository` alone, and a server that reads only those finds
-them the same way in either revision. The labels are bounded, at most 16, a key of at
+on and answers the policy for that; the runner reads nothing into them. A runner before
+0.5.0 sent `forge` and `repository` alone, and a server that reads only those finds
+them the same way from either. The labels are bounded, at most 16, a key of at
 most 64 bytes that needs no encoding and a value of at most 256 bytes, which is at most
 768 once encoded, so the query the labels make is at most 13,343 bytes; a server whose
 front end limits a request line to less refuses the longest of them. The reference

@@ -447,7 +447,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	evs := events(t, res)
-	if evs[0]["type"] != "ai.qory.ping" || fmt.Sprint(data(evs[0])["events"]) != "[*]" || data(evs[0])["contract_version"] != 2.0 {
+	if evs[0]["type"] != "ai.qory.ping" || fmt.Sprint(data(evs[0])["events"]) != "[*]" || data(evs[0])["contract_version"] != 1.0 {
 		t.Errorf("first event %v", evs[0])
 	}
 	if c.store.Count() != len(evs) || res.Undelivered != 0 || c.discoveries.Load() != 1 {

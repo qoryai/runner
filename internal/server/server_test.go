@@ -146,7 +146,7 @@ func newVerified(t *testing.T) *verified {
 	v.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		v.seen = r
 		v.body, _ = io.ReadAll(r.Body)
-		if r.Header.Get("User-Agent") != "qory-runner/test" || r.Header.Get(server.HeaderAccessKey) != key || r.Header.Get(server.HeaderContractVersion) != "2" {
+		if r.Header.Get("User-Agent") != "qory-runner/test" || r.Header.Get(server.HeaderAccessKey) != key || r.Header.Get(server.HeaderContractVersion) != "1" {
 			t.Errorf("%s %s: headers %v", r.Method, r.URL, r.Header)
 		}
 		if r.Method == http.MethodGet {
@@ -231,8 +231,8 @@ func TestRunConfigurationSignsTheQueryItSends(t *testing.T) {
 	if digest != "sha256="+strings.Repeat("0", 64) || rc.Version != 1 || !strings.Contains(string(rc.SecurityPolicy), `"api.example"`) {
 		t.Errorf("run configuration %+v, digest %s", rc, digest)
 	}
-	// The targets of the signed fixtures, revision 2 and revision 1 for the two labels
-	// it carried, then the edges.
+	// The targets of the signed fixtures, every label and the two a runner before 0.5.0
+	// carried, then the edges.
 	for _, tc := range []struct {
 		run    string
 		labels map[string]string

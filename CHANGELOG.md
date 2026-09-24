@@ -15,26 +15,25 @@ release may change what an existing document does, and says so under Upgrading.
   none; where a hook read `forge` and `repository`, it reads `labels["forge"]` and
   `labels["repository"]`, which are empty when the run has no such label, as before.
 - A server of your own finds every label of a run on the run configuration request,
-  where it found `forge` and `repository`, and `X-Qory-Contract-Version: 2`. One that
-  reads only those two parameters needs no change; one that refused any other
-  parameter, or a revision above 1, accepts them now, or refuses the runs that carry
-  more labels. A query of the longest labels is 13,343 bytes, which a front end that
+  where it found `forge` and `repository`. One that reads only those two parameters
+  needs no change; one that refused any other parameter accepts them now, or refuses
+  the runs that carry more labels. A query of the longest labels is 13,343 bytes, which a front end that
   limits the request line to 8 KiB refuses.
 - Nothing changes for the `qory` command, which labels a run with `forge` and
   `repository` and finds its policy chosen by them as before.
 
 ### Changed
 
-- The contract is `v1` revision 2: the run configuration request carries every label of
-  the run as its query, one parameter per label, sorted by key and percent-encoded,
-  `?forge=github.com&issue=77&repository=acme%2Fshop`, where revision 1 sent `forge` and
+- Contract `v1` revision 1 is amended in place, before any server relied on it: the run
+  configuration request carries every label of the run as its query, one parameter per
+  label, sorted by key and percent-encoded,
+  `?forge=github.com&issue=77&repository=acme%2Fshop`, where 0.4 sent `forge` and
   `repository` alone. The change adds: a server that reads only those two finds them as
   before. Which labels name what a run works on is the server's to decide; the runner
   reads nothing into them. The contract states the bound, at most 13,343 bytes of query
-  from sixteen labels, so a server knows the longest request line it can get.
-  `X-Qory-Contract-Version: 2` and `contract_version: 2` in the ping; `contracts.Revision`
-  is 2. A signed fixture of the revision 2 form,
-  `fixtures/signed/get-run-configuration-labels-valid.json`, beside the revision 1 one.
+  from sixteen labels, so a server knows the longest request line it can get. The
+  revision stays 1. A signed fixture of the form with every label,
+  `fixtures/signed/get-run-configuration-labels-valid.json`, beside the one of two.
 - The runner sends the run's labels, all of them, on every run configuration request,
   at the start and at each reload, and a label with an empty value as `key=`.
 - `receiver.Handler` reads the run configuration request's query as the run's labels
