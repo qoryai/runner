@@ -668,12 +668,13 @@ it: refused while the lock is held; then what the run's wall left behind is remo
 the run's label; a record with no `dev.qory.run.exited` gets one, numbered on from the
 last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`; and every
 event the server's filter wants that no accepted batch named is posted, in order, in
-batches cut the same way, until accepted or given up on. The resend fetches the
-configuration document first, as a run does, and posts where it says. What is still
-not accepted is under `undelivered/` again. A receiver sees some events twice when the
-runner died between an answer and its line, and discards them by `id` as ever. Nothing
-of this recovers a machine that died: the record went with it, and a receiver learns of
-that from heartbeats that stop.
+batches cut the same way, until accepted or given up on. The record of a runner
+before 0.5.1 is sent with each type under `dev.qory.`, and the file keeps what was
+written. The resend fetches the configuration document first, as a run does, and posts
+where it says. What is still not accepted is under `undelivered/` again. A receiver
+sees some events twice when the runner died between an answer and its line, and
+discards them by `id` as ever. Nothing of this recovers a machine that died: the record
+went with it, and a receiver learns of that from heartbeats that stop.
 
 **The modes of a run:**
 

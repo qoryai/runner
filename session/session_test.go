@@ -45,6 +45,8 @@ const (
 type control struct {
 	srv   *httptest.Server
 	store *receiver.File
+	// received is the store's file.
+	received string
 	// refuse, when set, is the status every request gets instead of an answer.
 	refuse atomic.Int32
 	// hits counts every request; discoveries the discovery fetches; fetches the run
@@ -78,11 +80,12 @@ func (a answering) WriteHeader(code int) {
 
 func newControl(t *testing.T) *control {
 	t.Helper()
-	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
+	received := filepath.Join(t.TempDir(), "received.jsonl")
+	store, err := receiver.OpenFile(received)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &control{store: store}
+	c := &control{store: store, received: received}
 	h := &receiver.Handler{
 		Keys:  func(k string) ([]string, bool) { return []string{testSecret}, k == testKey },
 		Store: store,
@@ -1111,6 +1114,35 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 	}
 	if len(evs) != len(lines) || store.Count()-before != len(evs) {
 		t.Errorf("%d events in the file, want %d; the store got %d", len(evs), len(lines), store.Count()-before)
+	}
+
+	// The record of a runner before 0.5.1, whose types start ai.qory.: its run.exited
+	// is found, and the server gets every event under the types of today.
+	sp = spec(t, nil)
+	sp.Local = true
+	if res, err = runWithSettingsEnv(t, sp); err != nil {
+		t.Fatal(err)
+	}
+	file = filepath.Join(res.Dir, "events.jsonl")
+	b, _ = os.ReadFile(file)
+	old := strings.ReplaceAll(string(b), `"type":"dev.qory.`, `"type":"ai.qory.`)
+	if err := os.WriteFile(file, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before = store.Count()
+	sent, err = session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Server: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := strings.Count(old, "\n")
+	if sent.Closed || sent.Sent != n || store.Count()-before != n {
+		t.Errorf("resend of a record before 0.5.1: %+v, the store got %d of %d", sent, store.Count()-before, n)
+	}
+	if got, _ := os.ReadFile(file); string(got) != old {
+		t.Error("the resend changed the record before 0.5.1")
+	}
+	if got, _ := os.ReadFile(c.received); strings.Contains(string(got), `"type":"ai.qory.`) {
+		t.Errorf("the server got a type of before 0.5.1:\n%s", got)
 	}
 
 	// A run that still goes.

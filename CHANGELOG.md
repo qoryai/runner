@@ -27,6 +27,10 @@ release may change what an existing document does, and says so under Upgrading.
   over their new bodies.
 - The containers and the networks of a wall carry the label `dev.qory.run`, where they
   carried `ai.qory.run`.
+- Sending again the record of a runner before 0.5.1 reads its `ai.qory.` types as
+  `dev.qory.` ones: its `run.exited` is found, so the record is not closed twice, and
+  the server gets each event under the type of today. The file keeps what was written.
+  The reap that goes with it removes what carries either label.
 
 ## [0.5.0] - 2026-09-24
 
