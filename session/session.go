@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/event"
@@ -100,9 +99,11 @@ type Spec struct {
 	// the run directory; anything else is refused.
 	RunID string
 	// Labels are the caller's own names for the run, its key in a queue, a repository, an
-	// issue: reported in run.started and nowhere else, so a receiver ties the run id to
-	// what it knows. At most MaxLabels; a key is 1 to 64 of a-z, 0-9, underscore, dot and
-	// dash, a value at most 256 bytes.
+	// issue: reported in run.started and no other event, so a receiver ties the run id to
+	// what it knows, and sent, all of them, as the query of the run configuration request,
+	// so the server chooses the run's policy by them. The runner reads nothing into them.
+	// At most MaxLabels; a key is 1 to 64 of a-z, 0-9, underscore, dot and dash, a value
+	// at most 256 bytes.
 	Labels map[string]string
 	// Timeout is how long the runtime may run; zero means no limit. At the limit the
 	// runtime is stopped the way the context ending stops it, and run.exited carries
@@ -151,15 +152,12 @@ const (
 )
 
 // MaxLabels is how many labels a run may carry.
-const MaxLabels = 16
+const MaxLabels = server.MaxLabels
 
 // errTimeout is the cause of the runtime's context ending at the spec's Timeout.
 var errTimeout = errors.New("the run's time limit")
 
-var (
-	runIDShape    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	labelKeyShape = regexp.MustCompile(`^[a-z0-9_.-]{1,64}$`)
-)
+var runIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // CheckRunID refuses a caller's run id that is not a UUID in the canonical lower-case
 // form. [Run] checks it; a command checks it first to call it a mistake of its user's.
@@ -172,20 +170,7 @@ func CheckRunID(id string) error {
 
 // CheckLabels refuses labels the contract's schema would: too many, a key outside its
 // grammar, a value too long. [Run] checks them; a command may first.
-func CheckLabels(labels map[string]string) error {
-	if len(labels) > MaxLabels {
-		return fmt.Errorf("%d labels; a run carries at most %d", len(labels), MaxLabels)
-	}
-	for k, v := range labels {
-		if !labelKeyShape.MatchString(k) {
-			return fmt.Errorf("the label key %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", k)
-		}
-		if len(v) > 256 || !utf8.ValidString(v) {
-			return fmt.Errorf("the value of the label %s is longer than 256 bytes or not UTF-8", k)
-		}
-	}
-	return nil
-}
+func CheckLabels(labels map[string]string) error { return server.CheckLabels(labels) }
 
 // closeWait is how long the sinks get to flush after the runtime exits.
 const closeWait = 15 * time.Second

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -56,6 +57,10 @@ type control struct {
 	// answered, when set, is the run configuration digest the answers to a delivery
 	// carry instead of the served document's.
 	answered string
+	// query is the last run configuration request's query as sent, and labels the
+	// labels the receiver handed its hook for it.
+	query  string
+	labels map[string]string
 }
 
 // answering sets the run configuration digest on a delivery's answer.
@@ -91,9 +96,10 @@ func newControl(t *testing.T) *control {
 			doc += "}"
 			return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
 		},
-		RunConfiguration: func(forge, repository string) ([]byte, string, bool) {
+		RunConfiguration: func(labels map[string]string) ([]byte, string, bool) {
 			c.mu.Lock()
 			defer c.mu.Unlock()
+			c.labels = maps.Clone(labels)
 			return c.run, c.digest, c.run != nil
 		},
 	}
@@ -104,6 +110,9 @@ func newControl(t *testing.T) *control {
 		}
 		if r.URL.Path == "/v1/run-configuration" {
 			c.fetches.Add(1)
+			c.mu.Lock()
+			c.query = r.URL.RawQuery
+			c.mu.Unlock()
 		}
 		if code := c.refuse.Load(); code != 0 {
 			w.WriteHeader(int(code))
@@ -512,10 +521,10 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 }
 
 // TestRunConfigurationIsThePolicyAndReloadsOnTheDigest pins the run configuration:
-// with a server that names one, its policy is the run's, over the spec's own, with
-// the source fetched and both digests; and when an answer says another is in force,
-// it is fetched and put in force with a second policy_applied, and the next
-// connection is decided by it.
+// with a server that names one, it is asked for with every label of the run, its
+// policy is the run's, over the spec's own, with the source fetched and both digests;
+// and when an answer says another is in force, it is fetched and put in force with a
+// second policy_applied, and the next connection is decided by it.
 func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
 	defer origin.Close()
@@ -526,7 +535,7 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	sp := spec(t, &session.Policy{Version: 1, Egress: session.PolicyEgress{Mode: "observe"}}, "FAKE_ALLOWED_URL="+origin.URL+"/after")
 	sp.Forwarder = nil
 	sp.Server = c.server()
-	sp.Labels = map[string]string{"forge": "github.com", "repository": "acme/shop"}
+	sp.Labels = map[string]string{"forge": "github.com", "issue": "77", "repository": "acme/shop"}
 	// The runtime waits for the test's go-ahead, then reaches the origin.
 	sp.Command, sp.Args = "sh", []string{"-c", `while [ ! -f "$1" ]; do sleep 0.05; done; exec "$0"`, os.Args[0], filepath.Join(dir, "go")}
 	sp.RunID = "0191f2a4-3c5e-7b8d-9e0f-1a2b3c4d5e6f"
@@ -570,6 +579,14 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	}
 	if c.store.Count() != len(evs) {
 		t.Errorf("the store holds %d of %d events", c.store.Count(), len(evs))
+	}
+	// The run configuration was asked for with every label of the run, and the
+	// receiver read them all back.
+	c.mu.Lock()
+	query, labels := c.query, c.labels
+	c.mu.Unlock()
+	if query != "forge=github.com&issue=77&repository=acme%2Fshop" || !maps.Equal(labels, sp.Labels) {
+		t.Errorf("the run configuration request's query %q, read as %v", query, labels)
 	}
 	// A run section that does not answer is no run.
 	c.mu.Lock()

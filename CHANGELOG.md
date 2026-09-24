@@ -4,6 +4,47 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [0.5.0] - 2026-09-24
+
+### Upgrading
+
+- A caller in Go that serves the run configuration through `receiver.Handler` changes
+  its hook: `RunConfiguration` is `func(labels map[string]string) ([]byte, string, bool)`,
+  where it was `func(forge, repository string)`. The map is every label of the run, from
+  the request's query or the run's `ai.qory.run.started`, and empty when there were
+  none; where a hook read `forge` and `repository`, it reads `labels["forge"]` and
+  `labels["repository"]`, which are empty when the run has no such label, as before.
+- A server of your own finds every label of a run on the run configuration request,
+  where it found `forge` and `repository`. One that reads only those two parameters
+  needs no change; one that refused any other parameter accepts them now, or refuses
+  the runs that carry more labels. A query of the longest labels is 13,343 bytes, which a front end that
+  limits the request line to 8 KiB refuses.
+- Nothing changes for the `qory` command, which labels a run with `forge` and
+  `repository` and finds its policy chosen by them as before.
+
+### Changed
+
+- Contract `v1` revision 1 is amended in place, before any server relied on it: the run
+  configuration request carries every label of the run as its query, one parameter per
+  label, sorted by key and percent-encoded,
+  `?forge=github.com&issue=77&repository=acme%2Fshop`, where 0.4 sent `forge` and
+  `repository` alone. The change adds: a server that reads only those two finds them as
+  before. Which labels name what a run works on is the server's to decide; the runner
+  reads nothing into them. The contract states the bound, at most 13,343 bytes of query
+  from sixteen labels, so a server knows the longest request line it can get. The
+  revision stays 1. A signed fixture of the form with every label,
+  `fixtures/signed/get-run-configuration-labels-valid.json`, beside the one of two.
+- The runner sends the run's labels, all of them, on every run configuration request,
+  at the start and at each reload, and a label with an empty value as `key=`.
+- `receiver.Handler` reads the run configuration request's query as the run's labels
+  and hands them all to `RunConfiguration`, and keeps each run's labels from its
+  `ai.qory.run.started` whole, so the digest an answer to a delivery carries is the one
+  for all of them. A query that is not labels, a key sent twice, a key outside the
+  grammar, a value over 256 bytes or not UTF-8, or more than sixteen, is a `400` once
+  the request verifies, and the hook does not see it.
+- The rule for labels, `session.CheckLabels` and `session.MaxLabels`, is one definition
+  the runner and the receiver share.
+
 ## [0.4.1] - 2026-09-21
 
 ### Fixed
@@ -359,7 +400,8 @@ release may change what an existing document does, and says so under Upgrading.
   It names the policy's `egress.allow` grammar as the one definition of a declared host,
   which the harness contract copies.
 
-[Unreleased]: https://github.com/qoryai/runner/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/qoryai/runner/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/qoryai/runner/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/qoryai/runner/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/qoryai/runner/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/qoryai/runner/compare/v0.2.0...v0.3.0

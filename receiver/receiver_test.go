@@ -5,11 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -57,7 +60,8 @@ func digestOf(b []byte) string {
 }
 
 // handler is a receiver over a fresh store, serving the contract's fixtures as its
-// documents, with its clock where the test puts it.
+// documents, with its clock where the test puts it. The run configuration hook records
+// the labels it was last handed in asked.
 func handler(t *testing.T, now int64) (*receiver.Handler, *receiver.File, *int) {
 	t.Helper()
 	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
@@ -73,8 +77,9 @@ func handler(t *testing.T, now int64) (*receiver.Handler, *receiver.File, *int) 
 		Store:         store,
 		Now:           func() time.Time { return time.Unix(now, 0) },
 		Configuration: func() ([]byte, string) { return conf, digestOf(conf) },
-		RunConfiguration: func(forge, repository string) ([]byte, string, bool) {
-			if forge == "none.example" {
+		RunConfiguration: func(labels map[string]string) ([]byte, string, bool) {
+			lastLabels = maps.Clone(labels)
+			if labels["forge"] == "none.example" {
 				return nil, "", false
 			}
 			return run, digestOf(run), true
@@ -82,6 +87,10 @@ func handler(t *testing.T, now int64) (*receiver.Handler, *receiver.File, *int) 
 	}
 	return h, store, asked
 }
+
+// lastLabels are the labels the run configuration hook was last handed. The tests
+// that read it do not run in parallel.
+var lastLabels map[string]string
 
 // signedGET makes a GET signed under the secret at the receiver's clock.
 func signedGET(target, sec string, ts string) *http.Request {
@@ -114,7 +123,7 @@ func serve(h *receiver.Handler, req *http.Request) *httptest.ResponseRecorder {
 func TestSignedFixturesReplay(t *testing.T) {
 	h, store, _ := handler(t, 1700000000)
 	names, err := fs.Glob(contracts.FS, "fixtures/signed/*.json")
-	if err != nil || len(names) < 8 {
+	if err != nil || len(names) < 9 {
 		t.Fatalf("signed fixtures: %v, %v", names, err)
 	}
 	sort.Strings(names)
@@ -152,6 +161,13 @@ func TestSignedFixturesReplay(t *testing.T) {
 		}
 		if rec.Code == http.StatusOK && strings.HasPrefix(f.Target, receiver.DefaultRunPath) && (rec.Header().Get(server.HeaderRunConfiguration) == "" || rec.Header().Get("ETag") != `"`+rec.Header().Get(server.HeaderRunConfiguration)+`"`) {
 			t.Errorf("%s: the run configuration answer's headers %v", name, rec.Header())
+		}
+		// Each run configuration fetch hands the hook every label its query carries.
+		if want, ok := map[string]map[string]string{
+			"get-run-configuration-valid.json":        {"forge": "github.com", "repository": "acme/shop"},
+			"get-run-configuration-labels-valid.json": {"forge": "github.com", "issue": "77", "repository": "acme/shop"},
+		}[path.Base(name)]; ok && !maps.Equal(lastLabels, want) {
+			t.Errorf("%s: the hook was handed %v, want %v", name, lastLabels, want)
 		}
 	}
 	if store.Count() != len(first) {
@@ -249,7 +265,9 @@ func TestEveryFailureIsOneUnauthorized(t *testing.T) {
 // TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests pins the events endpoint: the
 // wrong content type is 415, a duplicate is not stored twice, a reopened store still
 // knows its ids, and the answer carries the configuration digest and, once the run's
-// run.started named its labels, the run configuration digest for them.
+// run.started named its labels, the run configuration digest for all of them. It pins
+// the run configuration endpoint too: the query is the run's labels, and one that is
+// not, once the request verifies, is a 400 the hook never sees.
 func TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests(t *testing.T) {
 	h, store, _ := handler(t, 1700000000)
 	e := event.NewEmitter(event.NewRunID(), nil)
@@ -268,17 +286,54 @@ func TestDeliveriesAreStoredOnceAndAnsweredWithTheDigests(t *testing.T) {
 		t.Errorf("stored %d, want the duplicate dropped", store.Count())
 	}
 	other := event.NewEmitter(event.NewRunID(), nil)
-	line, _ := other.Make(event.RunStarted, map[string]any{"runtime": "x", "labels": map[string]string{"forge": "github.com", "repository": "acme/shop"}}).JSON()
+	labels := map[string]string{"forge": "github.com", "issue": "77", "repository": "acme/shop"}
+	line, _ := other.Make(event.RunStarted, map[string]any{"runtime": "x", "labels": labels}).JSON()
 	rec = serve(h, signedPOST(receiver.DefaultEventsPath, secret, []byte("["+string(line)+"]")))
 	run := fixture(t, "fixtures/run-configuration/enforce.json")
-	if rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderRunConfiguration) != digestOf(run) {
-		t.Errorf("a delivery for a forge with a run configuration: %d %v", rec.Code, rec.Header())
+	if rec.Code != http.StatusAccepted || rec.Header().Get(server.HeaderRunConfiguration) != digestOf(run) || !maps.Equal(lastLabels, labels) {
+		t.Errorf("a delivery for a forge with a run configuration: %d %v, the hook handed %v", rec.Code, rec.Header(), lastLabels)
+	}
+	lastLabels = nil
+	if rec := serve(h, signedPOST(receiver.DefaultEventsPath, secret, []byte("["+string(line)+"]"))); rec.Code != http.StatusAccepted || !maps.Equal(lastLabels, labels) {
+		t.Errorf("a later delivery of the run: %d, the hook handed %v", rec.Code, lastLabels)
+	}
+	unknown := event.NewEmitter(event.NewRunID(), nil)
+	log, _ := unknown.Make(event.RunLog, map[string]any{"stream": "stdout", "bytes": "eA=="}).JSON()
+	if rec := serve(h, signedPOST(receiver.DefaultEventsPath, secret, []byte("["+string(log)+"]"))); rec.Code != http.StatusAccepted || lastLabels == nil || len(lastLabels) != 0 {
+		t.Errorf("a delivery of a run whose run.started was not seen: %d, the hook handed %v", rec.Code, lastLabels)
 	}
 	if rec := serve(h, signedGET(receiver.DefaultRunPath+"?forge=github.com&repository=acme%2Fshop", secret, "1700000000")); rec.Code != 200 || rec.Header().Get("ETag") != `"`+digestOf(run)+`"` || rec.Body.String() != string(run) {
 		t.Errorf("the run configuration: %d %v", rec.Code, rec.Header())
 	}
 	if rec := serve(h, signedGET(receiver.DefaultRunPath+"?forge=none.example", secret, "1700000000")); rec.Code != 404 {
 		t.Errorf("the run configuration of a forge without one: %d", rec.Code)
+	}
+	if rec := serve(h, signedGET(receiver.DefaultRunPath, secret, "1700000000")); rec.Code != 200 || lastLabels == nil || len(lastLabels) != 0 {
+		t.Errorf("the run configuration of a run with no label: %d, the hook handed %v", rec.Code, lastLabels)
+	}
+	many := make([]string, 17)
+	for i := range many {
+		many[i] = fmt.Sprintf("k%d=v", i)
+	}
+	for name, query := range map[string]string{
+		"a key sent twice":       "forge=github.com&forge=gitlab.com",
+		"an upper-case key":      "Forge=github.com",
+		"an empty key":           "=github.com",
+		"a value over 256 bytes": "note=" + strings.Repeat("v", 257),
+		"a value not UTF-8":      "note=%FF",
+		"a malformed escape":     "note=%zz",
+		"seventeen labels":       strings.Join(many, "&"),
+	} {
+		lastLabels = nil
+		rec := serve(h, signedGET(receiver.DefaultRunPath+"?"+query, secret, "1700000000"))
+		if rec.Code != http.StatusBadRequest || lastLabels != nil {
+			t.Errorf("%s: %d, the hook handed %v", name, rec.Code, lastLabels)
+		}
+	}
+	bad := signedGET(receiver.DefaultRunPath+"?Forge=github.com", secret, "1700000000")
+	bad.Header.Set(server.HeaderSignature, server.SignGET(secret, http.MethodGet, receiver.DefaultRunPath, "1700000000"))
+	if rec := serve(h, bad); rec.Code != 401 {
+		t.Errorf("a query that is not labels under a signature that does not verify: %d, want the 401 first", rec.Code)
 	}
 	if rec := serve(h, signedGET("/elsewhere", secret, "1700000000")); rec.Code != 404 {
 		t.Errorf("a path the receiver does not serve: %d", rec.Code)
