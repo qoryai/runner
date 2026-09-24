@@ -326,7 +326,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		sinks.Close(ctx)
 		return nil, err
 	}
-	tools, err := tool.Start(ctx, chosen, runID, os.Environ(), spec.Report)
+	tools, err := tool.Start(ctx, chosen, runID, toolEnv(spec.Credentials), spec.Report)
 	if err != nil {
 		sinks.Close(ctx)
 		return nil, err
@@ -756,15 +756,27 @@ func claimedBy(held *credential.Held) func(string) string {
 
 // sameTools reports whether two selections of tools are the same, in any order.
 func sameTools(a, b []policy.Selected) bool {
-	if len(a) != len(b) {
-		return false
+	order := func(s []policy.Selected) []policy.Selected {
+		s = slices.Clone(s)
+		slices.SortFunc(s, func(x, y policy.Selected) int {
+			return strings.Compare(x.Name+"\x00"+x.Argument, y.Name+"\x00"+y.Argument)
+		})
+		return s
 	}
-	for _, s := range a {
-		if !slices.Contains(b, s) {
-			return false
+	return slices.Equal(order(a), order(b))
+}
+
+// toolEnv is the environment a tool gets: the runner's own, without the variables the
+// machine's credentials are read from, which are the runner's to hold and no tool's.
+func toolEnv(creds []Credential) []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.ContainsFunc(creds, func(c Credential) bool { return c.Env == name }) {
+			out = append(out, kv)
 		}
 	}
-	return true
+	return out
 }
 
 // proxyTools are the running tools as the proxy reaches them.

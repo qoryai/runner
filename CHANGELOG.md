@@ -24,10 +24,13 @@ release may change what an existing document does, and says so under Upgrading.
   its placeholders, and a policy's `tools` selects among them, by name and argument, as
   it selects credentials. Behind a wall the runner starts each selected tool outside the
   enclosure before the runtime, with `QORY_TOOL_LISTEN` naming the Unix socket it listens
-  on, and stops it when the run ends. The proxy ends the session's TLS for the hosts a
+  on and without the variables the machine's credentials are read from, and stops its
+  process group when the run ends. The proxy ends the session's TLS for the hosts a
   tool serves, decides the host and the path by the policy, and hands every request it
   lets through to the tool over the socket, streamed, with `Qory-Request-Id` and
-  `Qory-Path-Rule` set and every `Qory-` header the session sent taken off. A host a
+  `Qory-Path-Rule` set, `none` for a path observed that no rule covers. Every header and
+  trailer of the `Qory-` prefix the session sent, in any case or with an underscore, is
+  taken off, and naming the proxy's headers in `Connection` does not remove them. A host a
   tool serves need not exist: the proxy never dials it, so a service with no host of its
   own, an MCP server say, serves a name under `.internal`. A tool that does not listen
   within a minute, a host a tool and a credential both claim, and under enforce a host

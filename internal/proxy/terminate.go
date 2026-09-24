@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -57,9 +58,13 @@ const (
 	// RequestIDHeader carries the proxy's id of the request, the request_id of its
 	// egress event.
 	RequestIDHeader = "Qory-Request-Id"
-	// PathRuleHeader carries the path rule that let the request through; it is absent
-	// when the host has no path rules, or when under observe none matched.
+	// PathRuleHeader carries the path rule that let the request through, [NoPathRule]
+	// when the host has path rules and under observe none covers the path; it is absent
+	// when the host has none.
 	PathRuleHeader = "Qory-Path-Rule"
+	// NoPathRule is the path rule a tool is handed for a request observed and let
+	// through that no rule covers: never a path, which starts with a slash.
+	NoPathRule = "none"
 	// headerPrefix is the prefix of every header that is the proxy's to set.
 	headerPrefix = "Qory-"
 )
@@ -444,24 +449,40 @@ func (t *terminator) failed(w http.ResponseWriter, r *http.Request, err error) {
 // reached. The request goes as the session sent it otherwise, placeholders included:
 // what it names beyond its path is the tool's to check.
 func (t *terminator) toTool(w http.ResponseWriter, r *http.Request, d Decision, tl *Tool) {
-	for name := range r.Header {
-		if strings.HasPrefix(http.CanonicalHeaderKey(name), headerPrefix) {
-			r.Header.Del(name)
-		}
+	rule := d.PathRule
+	if _, ruled := t.rules(d.Host); ruled && rule == "" {
+		// Observed and let through: the host has rules and none covers the path.
+		rule = NoPathRule
 	}
-	r.Header.Set(RequestIDHeader, d.RequestID)
-	if d.PathRule != "" {
-		r.Header.Set(PathRuleHeader, d.PathRule)
-	}
-	host := d.Host
+	host := strings.TrimSuffix(d.Host, ".")
 	rp := &httputil.ReverseProxy{
+		// Rewrite runs after the hop-by-hop headers are gone, those the session names
+		// in Connection among them, so what is set here reaches the tool.
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// The host is the one the connection was decided on, whatever Host the
 			// request names; the tool reads it to know which of its hosts was asked.
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = host
 			pr.Out.Host = host
-			pr.Out.Trailer = pr.In.Trailer
+			scrub(pr.Out.Header)
+			pr.Out.Header.Set(RequestIDHeader, d.RequestID)
+			if rule != "" {
+				pr.Out.Header.Set(PathRuleHeader, rule)
+			}
+			// The trailer is announced before the body and filled after it: the tool
+			// gets one of its own, without the proxy's prefix, filled once the body is
+			// read.
+			pr.Out.Trailer = nil
+			if in := pr.In.Trailer; in != nil && pr.Out.Body != nil {
+				out := http.Header{}
+				for name := range in {
+					if !proxys(name) {
+						out[name] = nil
+					}
+				}
+				pr.Out.Trailer = out
+				pr.Out.Body = &trailing{ReadCloser: pr.Out.Body, in: in, out: out}
+			}
 		},
 		Transport:     tl.transport,
 		FlushInterval: -1,
@@ -475,6 +496,42 @@ func (t *terminator) toTool(w http.ResponseWriter, r *http.Request, d Decision, 
 	}
 	ctx := context.WithValue(r.Context(), pendingKey{}, &pending{d: d})
 	rp.ServeHTTP(w, r.WithContext(ctx))
+}
+
+// proxys reports whether a header's name is one of the proxy's to set: its prefix in
+// any case, with an underscore for a dash, which some servers read as the same name.
+func proxys(name string) bool {
+	return strings.HasPrefix(strings.ReplaceAll(strings.ToLower(name), "_", "-"), strings.ToLower(headerPrefix))
+}
+
+// scrub takes every header of the proxy's prefix off.
+func scrub(h http.Header) {
+	for name := range h {
+		if proxys(name) {
+			delete(h, name)
+		}
+	}
+}
+
+// trailing is a request body that copies the session's trailer to the tool's at its
+// end, without the proxy's prefix: the server fills the one before the body ends, and
+// the transport writes the other after.
+type trailing struct {
+	io.ReadCloser
+	in, out http.Header
+}
+
+// Read reads the body, and copies the trailer at its end.
+func (t *trailing) Read(b []byte) (int, error) {
+	n, err := t.ReadCloser.Read(b)
+	if err == io.EOF {
+		for name, values := range t.in {
+			if !proxys(name) {
+				t.out[name] = values
+			}
+		}
+	}
+	return n, err
 }
 
 // newRequestID is a request's id: 16 random bytes, hex.

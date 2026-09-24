@@ -39,7 +39,7 @@ func fakeTool(args []string) int {
 		defer mu.Unlock()
 		f, err := os.OpenFile(record, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err == nil {
-			fmt.Fprintf(f, "%s %s %s %s\n", r.Host, r.URL.Path, r.Header.Get("Qory-Path-Rule"), r.Header.Get("Qory-Request-Id"))
+			fmt.Fprintf(f, "%s %s %s %s %v\n", r.Host, r.URL.Path, r.Header.Get("Qory-Path-Rule"), r.Header.Get("Qory-Request-Id"), os.Getenv("QORY_TEST_MODEL_TOKEN") == "")
 			f.Close()
 		}
 		w.Write([]byte("from the tool"))
@@ -115,14 +115,17 @@ func toolSpec(t *testing.T, record string) (session.Spec, *relayWall) {
 }
 
 // TestAToolIsStartedForTheRunAndItsInvocationsRecorded pins a tool behind a wall: it is
-// started with the policy's argument before the runtime, the proxy hands it the
+// started with the policy's argument before the runtime, without the variable a
+// credential is read from, the proxy hands it the
 // requests the path rule lets through, with the rule and the request's id, and never
 // the one it refuses; every request is one egress event naming the tool, with the
 // status it answered and the id it was handed; the record lists the tool and its host
 // as terminated; the enclosure gets the authority and the placeholder, never a value.
 func TestAToolIsStartedForTheRunAndItsInvocationsRecorded(t *testing.T) {
+	t.Setenv("QORY_TEST_MODEL_TOKEN", "the-token-held-outside")
 	record := filepath.Join(t.TempDir(), "tool-saw")
 	sp, w := toolSpec(t, record)
+	sp.Credentials = []session.Credential{{Name: "model", Env: "QORY_TEST_MODEL_TOKEN", Hosts: []string{"api.model.example"}, Scheme: "bearer"}}
 	var said []string
 	var mu sync.Mutex
 	sp.Report = func(l string) { mu.Lock(); said = append(said, l); mu.Unlock() }
@@ -139,7 +142,7 @@ func TestAToolIsStartedForTheRunAndItsInvocationsRecorded(t *testing.T) {
 		t.Fatalf("the tool was handed %q", saw)
 	}
 	f := strings.Fields(lines[0])
-	if len(f) != 4 || f[0] != toolHost || f[1] != "/media/acme/shop/a.png" || f[2] != "/media/acme/shop/*" {
+	if len(f) != 5 || f[0] != toolHost || f[1] != "/media/acme/shop/a.png" || f[2] != "/media/acme/shop/*" || f[4] != "true" {
 		t.Errorf("the tool was handed %q", lines[0])
 	}
 	evs := events(t, res)

@@ -207,7 +207,11 @@ type Running struct {
 	cmd    *exec.Cmd
 	exited chan struct{}
 	err    error
-	report func(string)
+	// stderr is the read end of the tool's standard error, and drained is closed once
+	// it is read to its end.
+	stderr  *os.File
+	drained chan struct{}
+	report  func(string)
 	// ready says the tool listens, from when its lines are the runner's to report.
 	mu    sync.Mutex
 	ready bool
@@ -274,24 +278,30 @@ func start(ctx context.Context, c Chosen, runID string, env []string, report fun
 	cmd.Env = append(slices.Clone(env), EnvListen+"="+sock, EnvRunID+"="+runID)
 	// A group of its own, so what the tool starts in turn is stopped with it.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdout = io.Discard
-	stderr, err := cmd.StderrPipe()
+	// Standard output goes to the null device: a pipe the runner copied would make
+	// waiting for the tool wait for whatever it started as well.
+	cmd.Stdout = nil
+	// A pipe of the runner's own, not the command's: waiting for the tool does not wait
+	// for whatever it started that still holds its standard error.
+	stderr, w, err := os.Pipe()
 	if err != nil {
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	t := &Running{Name: c.Name, Serves: c.Serves, Socket: sock, dir: dir, cmd: cmd, exited: make(chan struct{}), report: report}
-	if err := cmd.Start(); err != nil {
+	cmd.Stderr = w
+	t := &Running{Name: c.Name, Serves: c.Serves, Socket: sock, dir: dir, cmd: cmd, exited: make(chan struct{}), drained: make(chan struct{}), stderr: stderr, report: report}
+	err = cmd.Start()
+	w.Close()
+	if err != nil {
+		stderr.Close()
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	lines := make(chan struct{})
 	go func() {
-		defer close(lines)
+		defer close(t.drained)
 		t.lines(stderr)
 	}()
 	go func() {
-		<-lines
 		t.err = cmd.Wait()
 		close(t.exited)
 		t.mu.Lock()
@@ -359,6 +369,11 @@ func (t *Running) listens(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.exited:
+			// The last line it wrote is the reason; it may still be in the pipe.
+			select {
+			case <-t.drained:
+			case <-time.After(time.Second):
+			}
 			return fmt.Errorf("%s exited before it listened: %v%s", t.cmd.Path, t.err, t.reason())
 		case <-deadline.C:
 			return fmt.Errorf("%s did not listen on %s within %s%s", t.cmd.Path, EnvListen, listenWait, t.reason())
@@ -383,6 +398,9 @@ func (t *Running) stop() {
 	t.stopping = true
 	t.mu.Unlock()
 	defer os.RemoveAll(t.dir)
+	// What the tool started may hold its standard error after it is gone; the runner
+	// stops reading it.
+	defer t.stderr.Close()
 	select {
 	case <-t.exited:
 		return

@@ -222,8 +222,8 @@ type Tool struct {
 	Name string
 	// Command is the program and its arguments; ${argument} in an argument is replaced
 	// by the argument the run's policy gives. The program gets the runner's own
-	// environment, with QORY_TOOL_LISTEN, the path of the Unix socket it listens on,
-	// and QORY_RUN_ID.
+	// environment, without the variables [Credential.Env] names, with QORY_TOOL_LISTEN,
+	// the path of the Unix socket it listens on, and QORY_RUN_ID.
 	Command []string
 	// Argument is a regular expression the policy's argument must match whole; empty
 	// means a policy passes none.

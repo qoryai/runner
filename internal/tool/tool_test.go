@@ -181,11 +181,19 @@ func TestStartRefusesAToolThatDoesNotListen(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "exited before it listened") || !strings.Contains(err.Error(), "no key for the store") {
 		t.Errorf("a tool that exits: %v", err)
 	}
+	// A tool that leaves a child holding its standard error is seen to exit all the same.
+	chosen[0].Command = []string{"/bin/sh", "-c", "sleep 30 & echo no key for the store >&2; exit 4"}
+	start := time.Now()
+	_, err = Start(context.Background(), chosen, "the-run", os.Environ(), func(string) {})
+	if err == nil || !strings.Contains(err.Error(), "exited before it listened") || !strings.Contains(err.Error(), "no key for the store") || time.Since(start) > 5*time.Second {
+		t.Errorf("a tool whose child holds its standard error: %v after %s", err, time.Since(start))
+	}
+	chosen, _ = Choose([]Definition{def("files", "", "files.tools.internal")}, []policy.Selected{{Name: "files"}})
 	t.Setenv(envMode, "stall")
 	was := listenWait
 	listenWait = 300 * time.Millisecond
 	defer func() { listenWait = was }()
-	start := time.Now()
+	start = time.Now()
 	_, err = Start(context.Background(), chosen, "the-run", os.Environ(), func(string) {})
 	if err == nil || !strings.Contains(err.Error(), "did not listen") {
 		t.Errorf("a tool that stalls: %v", err)

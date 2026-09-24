@@ -20,9 +20,9 @@ descriptor are on this side: the objects the command hands the runner and the on
 control plane delivers over the wire, and the compose report `qory` writes is versioned
 the same way. CloudEvents adds its own `specversion: 1.0`, which is not ours to change.
 
-**Revisions.** This is `v1`, revision 1. The runner announces the revision as one
-integer: the header `X-Qory-Contract-Version: 1` on every request to the server, and
-`contract_version: 1` in the ping's data. A runner that sends neither is revision 0,
+**Revisions.** This is `v1`, revision 2. The runner announces the revision as one
+integer: the header `X-Qory-Contract-Version: 2` on every request to the server, and
+`contract_version: 2` in the ping's data. A runner that sends neither is revision 0,
 the runners 0.1.0 to 0.3.0, which had no server. A runner on revision N knows every
 section defined up to N and ignores a section it does not know, and a server may rely
 on the sections up to N and no more. An addition is a new revision; a breaking change
@@ -416,7 +416,8 @@ tools:
 
 **Starting.** Before the runtime starts, the runner starts every selected tool outside
 the enclosure: the command, with `${argument}` replaced by the argument, one word of the
-command line and never a shell's; the runner's own environment, with `QORY_TOOL_LISTEN`,
+command line and never a shell's; the runner's own environment, without the variables
+the machine's credentials are read from, with `QORY_TOOL_LISTEN`,
 the path of a Unix socket in a private directory of the runner's, mode `0700`, and
 `QORY_RUN_ID`. The tool listens there within a minute; one that exits first, or does
 not, is no run, and the last line it wrote to standard error is the reason given. From
@@ -435,13 +436,14 @@ such a host goes the same way. The proxy never dials a host a tool serves, so th
 need not exist: a tool with no host of its own serves a name the machine's owner
 chooses, under `.internal` say, which no public name will ever be, and the session
 reaches it like any host. The proxy sets two headers of its own, after taking every
-header whose name starts `Qory-` off the request, so a tool reads them as the proxy's
-word:
+header and trailer whose name starts `Qory-` off the request, in any case and with an
+underscore for the dash, so a tool reads them as the proxy's word, and a session that
+names them in `Connection` does not take them off:
 
 | Header | Value |
 |---|---|
 | `Qory-Request-Id` | the proxy's id of the request, 32 lower-case hex digits: the `request_id` of its `dev.qory.run.egress` |
-| `Qory-Path-Rule` | the path rule that let the request through; absent when the host has no path rules, and when under `observe` none matched |
+| `Qory-Path-Rule` | the path rule that let the request through; `none` when the host has path rules and, under `observe`, none covers the path, which a tool that holds a run to its rules refuses; absent when the host has no path rules |
 
 The argument is not repeated per request: a tool started for the run has it on its
 command line.
@@ -465,7 +467,9 @@ the reload, and the policy in force stays.
 their hosts among `terminated`. Every request to a tool's host is one
 `dev.qory.run.egress`, a tool invocation: `method: HTTPS`, or `HTTP` for a plain request,
 with `request_method`, `path` without its query, `path_rule`, `tool`, the tool's name,
-`request_id`, and, once the tool answered, `status`. The runner reads no body, so what an
+`request_id`, and, once the tool answered, `status`. A request a path rule refuses names
+the tool it did not reach, with `decision: denied`; a connection the policy refuses by
+its host, by the deny list, the guard or the allow list, names none. The runner reads no body, so what an
 invocation did beyond its method and its path is the tool's to know; the runtime's hooks
 name the MCP call an agent made (`dev.qory.session.tool_started`).
 

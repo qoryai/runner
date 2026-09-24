@@ -27,9 +27,9 @@
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
 // TLS itself, reads each request's path and sets a credential on it, or hands it to the
-// tool that serves the host. For every other
-// host the proxy sees host names and ports and never the content of a TLS connection: a
-// tunnel is a blind relay once established. Only a proxy-aware program is seen.
+// tool that serves the host. For every other host the proxy sees host names and ports
+// and never the content of a TLS connection: a tunnel is a blind relay once
+// established. Only a proxy-aware program is seen.
 package proxy
 
 import (
@@ -431,9 +431,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	tl := term.tool(d.Host)
-	if tl != nil {
-		d.Tool = tl.Name
+	// A tool is named on a request the proxy decided by path, handed to the tool or
+	// refused by a rule; a host the policy refuses reaches no tool, as a tunnel's does not.
+	var tl *Tool
+	if d.Path != "" {
+		if tl = term.tool(d.Host); tl != nil {
+			d.Tool = tl.Name
+		}
 	}
 	if !d.Allowed {
 		p.observe(d)

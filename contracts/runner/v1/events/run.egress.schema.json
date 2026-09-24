@@ -14,7 +14,7 @@
     "path": {"description": "The request's path, without its query, with HTTPS.", "type": "string"},
     "path_rule": {"description": "The path entry that matched, of the policy's or the credential's, when the host has path rules; empty when none did, which is denied under enforce. wall:ambiguous-path when the path could be read two ways, denied in either mode.", "type": "string"},
     "credential": {"description": "The name of the credential the proxy set on the request, when it set one. Never its value.", "type": "string", "minLength": 1},
-    "tool": {"description": "The name of the tool that serves the host, to which the proxy handed the request when it let it through: a tool invocation. Added in revision 2.", "type": "string", "minLength": 1},
+    "tool": {"description": "The name of the tool that serves the host, on a request the proxy decided by its path: handed to the tool when it was allowed, a tool invocation, and not when a path rule refused it. A connection refused by its host names no tool. Added in revision 2.", "type": "string", "minLength": 1},
     "request_id": {"description": "The proxy's own id of a request it read, with HTTP and HTTPS: what a tool is handed as the Qory-Request-Id header. Added in revision 2.", "type": "string", "pattern": "^[0-9a-f]{32}$"},
     "status": {"description": "The status the host or the tool answered the request with, with HTTP and HTTPS, when one answered: absent when the request was refused or not delivered. Added in revision 2.", "type": "integer", "minimum": 100, "maximum": 599},
     "decision": {"type": "string", "enum": ["allowed", "denied"]},
