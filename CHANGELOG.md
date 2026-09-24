@@ -6,6 +6,44 @@ release may change what an existing document does, and says so under Upgrading.
 
 ## [Unreleased]
 
+### Upgrading
+
+- The contract is `v1` revision 2, and the runner sends `X-Qory-Contract-Version: 2`
+  and `contract_version: 2` in the ping. A server may put `tools` in a run
+  configuration's policy only for a runner that announced 2: an earlier runner's schema
+  refuses the policy, and its run does not start. `dev.qory.run.egress` carries three
+  fields it did not, `tool`, `request_id` and `status`; a receiver that validates event
+  data against the revision 1 schema, which refuses a field it does not name, validates
+  against this one.
+
+### Added
+
+- Tools: programs of the machine's that serve hosts, for what a run reaches that needs
+  more than a token in a header. `session.Spec.Tools` defines them, a name, a command
+  with `${argument}`, the pattern the argument must match, the hosts the tool serves and
+  its placeholders, and a policy's `tools` selects among them, by name and argument, as
+  it selects credentials. Behind a wall the runner starts each selected tool outside the
+  enclosure before the runtime, with `QORY_TOOL_LISTEN` naming the Unix socket it listens
+  on, and stops it when the run ends. The proxy ends the session's TLS for the hosts a
+  tool serves, decides the host and the path by the policy, and hands every request it
+  lets through to the tool over the socket, streamed, with `Qory-Request-Id` and
+  `Qory-Path-Rule` set and every `Qory-` header the session sent taken off. A host a
+  tool serves need not exist: the proxy never dials it, so a service with no host of its
+  own, an MCP server say, serves a name under `.internal`. A tool that does not listen
+  within a minute, a host a tool and a credential both claim, and under enforce a host
+  the allow list does not cover are no run; a reload that selects other tools is
+  refused. The runner knows no protocol: signing a request to an object store is a
+  tool's, not a scheme's.
+- Every request to a tool's host is one `dev.qory.run.egress`, a tool invocation, with
+  `tool`, the tool's name. `dev.qory.run.policy_applied` lists the run's `tools` and
+  their hosts among `terminated`.
+- Every egress event that is one request, a plain one or one inside a terminated
+  connection, carries `request_id`, the proxy's own id of it, and `status`, the status
+  the host or the tool answered, when one answered.
+- The wall's conformance suite reaches a tool from inside the enclosure: on its paths it
+  is handed the proxy's headers and not the ones the probe forged, and off them the
+  proxy refuses.
+
 ### Changed
 
 - A wall points `AWS_CA_BUNDLE` at the run's bundle as well, beside `SSL_CERT_FILE`,
@@ -17,6 +55,12 @@ release may change what an existing document does, and says so under Upgrading.
 - The contract says what a path rule does not read: a request's query, headers and
   body. A subresource in the query, a listing's prefix, a copy's source in a header and
   a GraphQL body are outside what a rule holds a run to.
+
+### Fixed
+
+- A request's trailer reaches the host of a terminated connection. The proxy passed on
+  a copy of the trailer made before the body was read, which held no values, so a
+  client that sent a checksum as a trailer sent none upstream.
 
 ## [0.5.1] - 2026-09-24
 

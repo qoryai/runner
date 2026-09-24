@@ -39,6 +39,7 @@ type Policy struct {
 	Version     int        `json:"version"`
 	Egress      Egress     `json:"egress"`
 	Credentials []Selected `json:"credentials,omitempty"`
+	Tools       []Selected `json:"tools,omitempty"`
 }
 
 // Egress is the policy's egress section.
@@ -52,7 +53,7 @@ type Egress struct {
 	Paths map[string][]string `json:"paths,omitempty"`
 }
 
-// Selected is one credential of the machine's the policy lets the run use.
+// Selected is one credential or tool of the machine's the policy lets the run use.
 type Selected struct {
 	Name     string `json:"name"`
 	Argument string `json:"argument,omitempty"`

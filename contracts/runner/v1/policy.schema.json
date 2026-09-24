@@ -65,6 +65,19 @@
           "argument": {"description": "What the run asks the credential for, a repository say, given to the definition's adapter as one argument. The definition says what an argument may look like; one it does not provide for is no run.", "type": "string", "minLength": 1, "maxLength": 256}
         }
       }
+    },
+    "tools": {
+      "description": "The tools of the machine's this run may reach, by name, behind a wall. The runner starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and hands it every request to them the policy lets through. A name the machine does not define is no run. Added in revision 2.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+          "argument": {"description": "What the run asks the tool for, a repository or a prefix say, given to the definition's command as one argument. The definition says what an argument may look like; one it does not provide for is no run.", "type": "string", "minLength": 1, "maxLength": 256}
+        }
+      }
     }
   },
   "$defs": {

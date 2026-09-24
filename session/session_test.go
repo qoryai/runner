@@ -146,9 +146,10 @@ func (c *control) server() *session.Server {
 	return &session.Server{Version: 1, URL: c.srv.URL, AccessKey: testKey, Secret: testSecret}
 }
 
-// TestMain lets the test binary stand in for a runtime and for the hook forwarder, so
-// no real runtime and no shell script are needed: with QORY_TEST_RUNTIME set it acts as
-// a runtime, with QORY_TEST_FORWARD set as the forwarder.
+// TestMain lets the test binary stand in for a runtime, for the hook forwarder and for a
+// tool, so no real runtime and no shell script are needed: with QORY_TEST_RUNTIME set it
+// acts as a runtime, with QORY_TEST_FORWARD set as the forwarder, and with toolMode as
+// its first argument as a tool.
 func TestMain(m *testing.M) {
 	switch {
 	case os.Getenv("QORY_TEST_FORWARD") != "":
@@ -159,6 +160,8 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	case os.Getenv("QORY_TEST_RUNTIME") != "":
 		os.Exit(fakeRuntime())
+	case len(os.Args) > 2 && os.Args[1] == toolMode:
+		os.Exit(fakeTool(os.Args[2:]))
 	}
 	os.Exit(m.Run())
 }
@@ -450,7 +453,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	evs := events(t, res)
-	if evs[0]["type"] != "dev.qory.ping" || fmt.Sprint(data(evs[0])["events"]) != "[*]" || data(evs[0])["contract_version"] != 1.0 {
+	if evs[0]["type"] != "dev.qory.ping" || fmt.Sprint(data(evs[0])["events"]) != "[*]" || data(evs[0])["contract_version"] != 2.0 {
 		t.Errorf("first event %v", evs[0])
 	}
 	if c.store.Count() != len(evs) || res.Undelivered != 0 || c.discoveries.Load() != 1 {

@@ -17,6 +17,9 @@ import (
 	"time"
 
 	"golang.org/x/term"
+
+	"github.com/qoryai/runner/internal/proxy"
+	"github.com/qoryai/runner/internal/tool"
 )
 
 // probePrefix starts the one line of standard output that holds the probe's report.
@@ -61,6 +64,10 @@ type report struct {
 	BundleKeys     int               `json:"bundle_keys"`
 	Hook           string            `json:"hook"`
 	Terminal       bool              `json:"terminal"`
+	ToolAllowed    int               `json:"tool_allowed"`
+	ToolAllowedErr string            `json:"tool_allowed_err"`
+	ToolSaw        string            `json:"tool_saw"`
+	ToolDenied     int               `json:"tool_denied"`
 }
 
 // wait is how long an attempt that must fail is given to fail.
@@ -92,6 +99,11 @@ func probe(args []string) int {
 	r.PathDenied, _ = get(os.Getenv("PROBE_ALLOWED") + "outside-the-paths")
 	r.TLSDenied, r.TLSDeniedErr = get("https://" + credentialHost + "/outside-the-paths")
 	r.TLSAllowed, r.TLSAllowedErr = get("https://" + credentialHost + credentialPath)
+	// The tool's host, which exists nowhere: on its paths the tool answers with what the
+	// proxy handed it, whatever the probe claimed under the proxy's prefix; off them the
+	// proxy refuses, and the tool never hears of it.
+	r.ToolAllowed, r.ToolSaw, r.ToolAllowedErr = fetch("https://"+toolHost+"/tool/inside", "Qory-Path-Rule", "/")
+	r.ToolDenied, _ = get("https://" + toolHost + "/outside-the-tool")
 	r.Placeholder = os.Getenv(placeholderVar)
 	for _, kv := range os.Environ() {
 		if name, value, _ := strings.Cut(kv, "="); strings.Contains(value, tokenMark) {
@@ -203,18 +215,45 @@ func dial(addr string) string {
 // get fetches u through the proxy the environment names, explicitly, because some of
 // what the probe asks for is on loopback, which NO_PROXY exempts.
 func get(u string) (int, string) {
+	code, _, err := fetch(u)
+	return code, err
+}
+
+// fetch is get with a header set, returning the body as well.
+func fetch(u string, header ...string) (int, string, string) {
 	proxyURL, err := url.Parse(os.Getenv("HTTP_PROXY"))
 	if err != nil || proxyURL.Host == "" {
-		return 0, "HTTP_PROXY is " + os.Getenv("HTTP_PROXY")
+		return 0, "", "HTTP_PROXY is " + os.Getenv("HTTP_PROXY")
 	}
 	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}, Timeout: 10 * time.Second}
-	resp, err := client.Get(u)
+	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
-		return 0, err.Error()
+		return 0, "", err.Error()
 	}
-	io.Copy(io.Discard, resp.Body)
+	if len(header) == 2 {
+		req.Header.Set(header[0], header[1])
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, "", err.Error()
+	}
+	b, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	return resp.StatusCode, ""
+	return resp.StatusCode, string(b), ""
+}
+
+// serveTool is the suite's tool: it listens where the runner says and answers every
+// request with the path rule and the id the proxy handed it.
+func serveTool() int {
+	ln, err := net.Listen("unix", os.Getenv(tool.EnvListen))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "rule=%s id=%s", r.Header.Get(proxy.PathRuleHeader), r.Header.Get(proxy.RequestIDHeader))
+	}))
+	return 0
 }
 
 // hook calls the SessionEnd hooks the settings name, as the runtime would, and returns

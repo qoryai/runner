@@ -5,6 +5,7 @@ import (
 
 	"github.com/qoryai/runner/internal/credential"
 	"github.com/qoryai/runner/internal/policy"
+	"github.com/qoryai/runner/internal/tool"
 )
 
 // Policy is the run's policy document, contracts/runner/v1/policy.schema.json, as the
@@ -17,6 +18,15 @@ type Policy struct {
 	Egress PolicyEgress `json:"egress"`
 	// Credentials are the credentials of [Spec.Credentials] the run may use, by name.
 	Credentials []PolicyCredential `json:"credentials,omitempty"`
+	// Tools are the tools of [Spec.Tools] the run may reach, by name.
+	Tools []PolicyTool `json:"tools,omitempty"`
+}
+
+// PolicyTool selects one tool the machine defines.
+type PolicyTool struct {
+	Name string `json:"name"`
+	// Argument is what the run asks the tool for, a repository or a prefix say.
+	Argument string `json:"argument,omitempty"`
 }
 
 // PolicyCredential selects one credential the machine defines.
@@ -54,6 +64,9 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 	for _, c := range p.Credentials {
 		out.Credentials = append(out.Credentials, PolicyCredential{Name: c.Name, Argument: c.Argument})
 	}
+	for _, t := range p.Tools {
+		out.Tools = append(out.Tools, PolicyTool{Name: t.Name, Argument: t.Argument})
+	}
 	return out, nil
 }
 
@@ -65,8 +78,8 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 // limit of its own and gets the ceiling, and one in mode enforce gets its entries the
 // ceiling covers; an entry it does not cover is dropped, as a harness declaration's
 // is. Path rules narrow the same way: a host both name keeps the policy's paths the
-// ceiling's cover, and a host one of them names keeps its rules. The credentials are
-// the policy's own: a ceiling defines them and selects none.
+// ceiling's cover, and a host one of them names keeps its rules. The credentials and
+// the tools are the policy's own: a ceiling defines them and selects none.
 func (p *Policy) Under(ceiling *Policy) *Policy {
 	if ceiling == nil {
 		return p
@@ -83,7 +96,7 @@ func (p *Policy) Under(ceiling *Policy) *Policy {
 	if p.Egress.Mode != string(policy.Enforce) {
 		c := *ceiling
 		c.Egress.Deny = deny
-		c.Credentials = p.Credentials
+		c.Credentials, c.Tools = p.Credentials, p.Tools
 		return &c
 	}
 	allow := []string{}
@@ -119,7 +132,7 @@ func (p *Policy) Under(ceiling *Policy) *Policy {
 	if len(paths) == 0 {
 		paths = nil
 	}
-	return &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: allow, Deny: deny, Paths: paths}, Credentials: p.Credentials}
+	return &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: allow, Deny: deny, Paths: paths}, Credentials: p.Credentials, Tools: p.Tools}
 }
 
 // bothDeny is the deny list of a policy under a ceiling: the ceiling's entries, then
@@ -193,3 +206,38 @@ type Credential struct {
 // Check refuses a definition that cannot be one, so a command reading the machine's
 // configuration says so before any run selects it.
 func (c Credential) Check() error { return credential.Definition(c).Check() }
+
+// Tool is one tool as the machine defines it, [Spec.Tools]: a program the runner starts
+// for the run, outside the enclosure, that serves hosts. The proxy ends the session's
+// TLS for those hosts, decides the host and the path by the policy as for any host, and
+// hands every request it lets through to the tool, over a Unix socket the tool listens
+// on, as plain HTTP/1.1 with the headers Qory-Request-Id and Qory-Path-Rule. A run's
+// policy selects tools by name and defines none.
+//
+// What the tool does with a request is its own: the protocol, its secrets, whom it
+// calls. A path rule reads the path and nothing else, so what a request names beyond
+// its path, in its query, its headers or its body, is the tool's to check.
+type Tool struct {
+	// Name is what a policy selects it by.
+	Name string
+	// Command is the program and its arguments; ${argument} in an argument is replaced
+	// by the argument the run's policy gives. The program gets the runner's own
+	// environment, with QORY_TOOL_LISTEN, the path of the Unix socket it listens on,
+	// and QORY_RUN_ID.
+	Command []string
+	// Argument is a regular expression the policy's argument must match whole; empty
+	// means a policy passes none.
+	Argument string
+	// Serves are the hosts whose requests go to the tool, in the grammar of the
+	// policy's allow list. A host need not exist: a tool with no host of its own serves
+	// a name the machine's owner chose, under .internal say, and the proxy never dials
+	// it.
+	Serves []string
+	// Placeholders are variables the enclosure gets with a value that is no credential,
+	// for a program that does not start without one set.
+	Placeholders []string
+}
+
+// Check refuses a definition that cannot be one, so a command reading the machine's
+// configuration says so before any run selects it.
+func (t Tool) Check() error { return tool.Definition(t).Check() }

@@ -26,7 +26,8 @@
 // mode. Without the guard the way around a wall is through the proxy.
 //
 // Behind a wall, for the hosts [Proxy.Terminate] is given, the proxy ends the session's
-// TLS itself, reads each request's path and sets a credential on it. For every other
+// TLS itself, reads each request's path and sets a credential on it, or hands it to the
+// tool that serves the host. For every other
 // host the proxy sees host names and ports and never the content of a TLS connection: a
 // tunnel is a blind relay once established. Only a proxy-aware program is seen.
 package proxy
@@ -78,6 +79,14 @@ type Decision struct {
 	// terminates, where Method is "HTTPS", or a plain request's to a host with path
 	// rules; Credential names the credential the proxy set on it, if it set one.
 	RequestMethod, Path, PathRule, Credential string
+	// Tool names the tool the proxy handed the request to, when the host is one a tool
+	// serves.
+	Tool string
+	// RequestID is the proxy's own id of a request it read, the one a tool is handed as
+	// [RequestIDHeader]; Status is the status the host or the tool answered it with,
+	// zero when nothing answered.
+	RequestID string
+	Status    int
 }
 
 // rules is what the proxy decides by: the policy's mode, allow list and deny list, and
@@ -412,17 +421,28 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d := p.decide("HTTP", host, port)
+	d.RequestID = newRequestID()
+	term := p.term.Load()
 	if d.Allowed {
-		if clean, rule, ok := p.term.Load().plainPath(d.Host, r.URL.EscapedPath()); clean != "" {
+		if clean, rule, ok := term.plainPath(d.Host, r.URL.EscapedPath()); clean != "" {
 			d.RequestMethod, d.Path, d.PathRule, d.Allowed = r.Method, clean, rule, ok
 			if !ok {
 				d.Outcome = Refused
 			}
 		}
 	}
+	tl := term.tool(d.Host)
+	if tl != nil {
+		d.Tool = tl.Name
+	}
 	if !d.Allowed {
 		p.observe(d)
 		deny(w, d)
+		return
+	}
+	if tl != nil {
+		// A tool is reached on its socket whatever the scheme; the host is never dialled.
+		term.toTool(w, r, d, tl)
 		return
 	}
 	out := r.Clone(p.dialContext(r.Context(), d))
@@ -442,7 +462,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	d.Outcome = Connected
+	d.Outcome, d.Status = Connected, resp.StatusCode
 	p.observe(d)
 	defer resp.Body.Close()
 	for k, vs := range resp.Header {

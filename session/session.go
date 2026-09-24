@@ -22,6 +22,7 @@ import (
 	"github.com/qoryai/runner/internal/server"
 	"github.com/qoryai/runner/internal/sink"
 	"github.com/qoryai/runner/internal/socket"
+	"github.com/qoryai/runner/internal/tool"
 	"github.com/qoryai/runner/runtimes"
 	"github.com/qoryai/runner/wall"
 )
@@ -83,6 +84,11 @@ type Spec struct {
 	// proxy then terminates TLS for the hosts concerned, with an authority made for the
 	// run whose certificate the enclosure is given to trust.
 	Credentials []Credential
+	// Tools are the tools this machine defines; the run's policy selects among them by
+	// name. A selected tool needs a Wall, as a credential does: the proxy terminates TLS
+	// for the hosts it serves. The runner starts each selected tool before the runtime
+	// and stops it when the run ends; the tools a run has are fixed when it starts.
+	Tools []Tool
 	// Declared is the egress the harness declared, nil when nothing was. It is
 	// reported in dev.qory.run.policy_applied as harness_hosts and decides nothing:
 	// the policy alone decides.
@@ -288,9 +294,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 	}
 	allow := pol.Policy.Egress.Allow
-	if (len(pol.Policy.Credentials) > 0 || len(pol.Policy.Egress.Paths) > 0) && spec.Wall == nil {
+	if (len(pol.Policy.Credentials) > 0 || len(pol.Policy.Tools) > 0 || len(pol.Policy.Egress.Paths) > 0) && spec.Wall == nil {
 		sinks.Close(ctx)
-		return nil, errors.New("the policy selects credentials or has path rules, which need a wall: without one a program that ignores the proxy is bound by neither")
+		return nil, errors.New("the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them")
 	}
 	defs := make([]credential.Definition, len(spec.Credentials))
 	for i, c := range spec.Credentials {
@@ -308,6 +314,24 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		}
 		held.Close()
 	}()
+	// The tools, started before anything else is: a tool that does not listen is no
+	// run. They are stopped after the proxy is closed, so no request reaches a tool
+	// that is gone.
+	toolDefs := make([]tool.Definition, len(spec.Tools))
+	for i, t := range spec.Tools {
+		toolDefs[i] = tool.Definition(t)
+	}
+	chosen, err := choose(spec, toolDefs, pol, held)
+	if err != nil {
+		sinks.Close(ctx)
+		return nil, err
+	}
+	tools, err := tool.Start(ctx, chosen, runID, os.Environ(), spec.Report)
+	if err != nil {
+		sinks.Close(ctx)
+		return nil, err
+	}
+	defer tools.Close()
 	// record numbers and writes under one lock, so the order in the sinks is the order
 	// of the sequence whichever goroutine emits: the proxy, the socket, the heartbeat,
 	// a reload. write takes the lock; record is for a caller that holds it.
@@ -353,13 +377,13 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	// configuration with path rules or credentials, and the enclosure trusts only what
 	// it was given at start.
 	var authority []byte
-	if len(held.Uses) > 0 || len(pol.Policy.Egress.Paths) > 0 || (spec.Wall != nil && srv != nil) {
+	if len(held.Uses) > 0 || len(chosen) > 0 || len(pol.Policy.Egress.Paths) > 0 || (spec.Wall != nil && srv != nil) {
 		ca, err := proxy.NewCA(runID)
 		if err != nil {
 			sinks.Close(ctx)
 			return nil, err
 		}
-		px.Terminate(ca, proxyUses(held), pol.Policy.Egress.Paths)
+		px.Terminate(ca, proxyUses(held), pol.Policy.Egress.Paths, proxyTools(tools))
 		authority = ca.PEM()
 	}
 	// Behind a wall the proxy listens where other containers of the engine, or other
@@ -406,7 +430,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	if enclosure != nil {
 		launch, err = enclosure.Wrap(ctx, wall.Launch{
 			Command: command, Args: args, Dir: spec.Dir, Interactive: interactive,
-			Env:   environment(spec.Env, prepared.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders)),
+			Env:   environment(spec.Env, prepared.Env, []string{EnvRunID + "=" + runID}, placeholders(held.Placeholders), placeholders(tool.Placeholders(chosen))),
 			CA:    authority,
 			Proxy: px.Addr(), Socket: sock.Path(), Mounts: mounts, Limits: spec.Limits, ProxyToken: token,
 		})
@@ -473,6 +497,13 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			}
 			a["credentials"] = uses
 		}
+		if len(chosen) > 0 {
+			used := make([]map[string]any, len(chosen))
+			for i, c := range chosen {
+				used[i] = map[string]any{"name": c.Name, "hosts": c.Serves}
+			}
+			a["tools"] = used
+		}
 		if hosts := px.Terminated(); len(hosts) > 0 {
 			a["terminated"] = hosts
 		}
@@ -490,6 +521,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		// other event.
 		srv.start(func(next *policy.Loaded) error {
 			in := *next
+			if !sameTools(in.Policy.Tools, pol.Policy.Tools) {
+				return errors.New("the run configuration selects other tools than the run started with; a run's tools are fixed when it starts")
+			}
 			if !px.Terminates() {
 				if len(in.Policy.Credentials) > 0 {
 					return errors.New("the run configuration selects credentials, which need a wall")
@@ -502,6 +536,10 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			}
 			fresh, err := hold(ctx, spec, defs, &in)
 			if err != nil {
+				return err
+			}
+			if err := tool.Check(chosen, in.Policy.Egress.Mode, in.Policy.Egress.Allow, claimedBy(fresh)); err != nil {
+				fresh.Close()
 				return err
 			}
 			mu.Lock()
@@ -683,6 +721,61 @@ func hold(ctx context.Context, spec Spec, defs []credential.Definition, pol *pol
 	return held, nil
 }
 
+// choose resolves the tools a policy selects, as the machine defines them, beside the
+// credentials the run holds, and refuses a placeholder the run passes a value for.
+func choose(spec Spec, defs []tool.Definition, pol *policy.Loaded, held *credential.Held) ([]tool.Chosen, error) {
+	chosen, err := tool.Choose(defs, pol.Policy.Tools)
+	if err != nil {
+		return nil, err
+	}
+	if err := tool.Check(chosen, pol.Policy.Egress.Mode, pol.Policy.Egress.Allow, claimedBy(held)); err != nil {
+		return nil, err
+	}
+	for _, name := range tool.Placeholders(chosen) {
+		if slices.ContainsFunc(spec.Env, func(kv string) bool { return strings.HasPrefix(kv, name+"=") }) {
+			return nil, fmt.Errorf("%s is a placeholder of a tool the runner starts outside the enclosure, and the run passes a value for it inside", name)
+		}
+	}
+	return chosen, nil
+}
+
+// claimedBy names the held credential that is for a host, or above or below it; empty
+// when none is.
+func claimedBy(held *credential.Held) func(string) string {
+	return func(host string) string {
+		for _, u := range held.Uses {
+			for _, h := range u.Hosts {
+				if policy.Covers(h, host) || policy.Covers(host, h) {
+					return u.Name
+				}
+			}
+		}
+		return ""
+	}
+}
+
+// sameTools reports whether two selections of tools are the same, in any order.
+func sameTools(a, b []policy.Selected) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, s := range a {
+		if !slices.Contains(b, s) {
+			return false
+		}
+	}
+	return true
+}
+
+// proxyTools are the running tools as the proxy reaches them.
+func proxyTools(set *tool.Set) []proxy.Tool {
+	out := make([]proxy.Tool, len(set.Tools))
+	for i, t := range set.Tools {
+		out[i] = proxy.Tool{Name: t.Name, Hosts: t.Serves, Socket: t.Socket}
+	}
+	return out
+}
+
 // proxyUses are the held credentials as the proxy sets them.
 func proxyUses(held *credential.Held) []proxy.Credential {
 	uses := make([]proxy.Credential, len(held.Uses))
@@ -725,6 +818,15 @@ func egress(d proxy.Decision) map[string]any {
 	}
 	if d.Credential != "" {
 		data["credential"] = d.Credential
+	}
+	if d.Tool != "" {
+		data["tool"] = d.Tool
+	}
+	if d.RequestID != "" {
+		data["request_id"] = d.RequestID
+	}
+	if d.Status != 0 {
+		data["status"] = d.Status
 	}
 	return data
 }
