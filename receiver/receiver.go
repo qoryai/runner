@@ -18,8 +18,11 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -71,10 +74,14 @@ type Handler struct {
 	// Configuration answers discovery with the configuration document and the
 	// receiver's digest of it. Nil means discovery is not served.
 	Configuration func() (document []byte, digest string)
-	// RunConfiguration answers a run configuration for a forge and a repository, each
-	// empty when the runner has no such label, with the receiver's digest of it; ok
-	// false means none for them, a 404. Nil means the run configuration is not served.
-	RunConfiguration func(forge, repository string) (document []byte, digest string, ok bool)
+	// RunConfiguration answers the run configuration for a run's labels, with the
+	// receiver's digest of it; ok false means none for them, a 404. Which labels name
+	// what the run works on is its to decide: the qory command labels a run in a git
+	// checkout with forge and repository, and another caller labels its runs as it
+	// likes. The map is every label the request or the run's run.started carried,
+	// empty when there were none, and a copy the hook may keep. Nil means the run
+	// configuration is not served.
+	RunConfiguration func(labels map[string]string) (document []byte, digest string, ok bool)
 	// EventsPath and RunPath are where the events endpoint and the run configuration
 	// are served; empty means DefaultEventsPath and DefaultRunPath.
 	EventsPath, RunPath string
@@ -84,10 +91,10 @@ type Handler struct {
 	// true answer is a 410. Nil means never.
 	Stop func(runID string) bool
 
-	// labels are the forge and repository of each run whose run.started passed, so an
-	// answer to a later delivery says which run configuration is in force for it.
+	// labels are the labels of each run whose run.started passed, so an answer to a
+	// later delivery says which run configuration is in force for it.
 	mu     sync.Mutex
-	labels map[string][2]string
+	labels map[string]map[string]string
 }
 
 // ServeHTTP routes one request.
@@ -133,8 +140,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			unauthorized(w)
 			return
 		}
-		q := r.URL.Query()
-		doc, digest, ok := h.RunConfiguration(q.Get("forge"), q.Get("repository"))
+		labels, err := queryLabels(r.URL.RawQuery)
+		if err != nil {
+			http.Error(w, "the query is not the run's labels: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		doc, digest, ok := h.RunConfiguration(labels)
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -146,6 +157,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// queryLabels reads a run configuration request's query as the run's labels, every
+// parameter one label, and refuses what is not: a query that does not parse, a key sent
+// twice, and what the labels of a run may not be.
+func queryLabels(raw string) (map[string]string, error) {
+	q, err := url.ParseQuery(raw)
+	if err != nil {
+		return nil, err
+	}
+	labels := make(map[string]string, len(q))
+	for k, vs := range q {
+		if len(vs) != 1 {
+			return nil, fmt.Errorf("the label %q is sent %d times", k, len(vs))
+		}
+		labels[k] = vs[0]
+	}
+	if err := server.CheckLabels(labels); err != nil {
+		return nil, err
+	}
+	return labels, nil
 }
 
 // allow answers 405 unless the request has the method, and says whether it does.
@@ -281,9 +313,9 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 		if head.Type == "ai.qory.run.started" {
 			h.mu.Lock()
 			if h.labels == nil {
-				h.labels = map[string][2]string{}
+				h.labels = map[string]map[string]string{}
 			}
-			h.labels[head.Subject] = [2]string{head.Data.Labels["forge"], head.Data.Labels["repository"]}
+			h.labels[head.Subject] = head.Data.Labels
 			h.mu.Unlock()
 		}
 		if h.Store.Seen(head.ID) {
@@ -304,7 +336,8 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 }
 
 // digests sets on an answer the digests in force: the configuration's, and the run
-// configuration's for the run's forge and repository as its run.started said.
+// configuration's for the run's labels as its run.started said, none when the receiver
+// has not seen it.
 func (h *Handler) digests(w http.ResponseWriter, runID string) {
 	if h.Configuration != nil {
 		_, digest := h.Configuration()
@@ -312,9 +345,12 @@ func (h *Handler) digests(w http.ResponseWriter, runID string) {
 	}
 	if h.RunConfiguration != nil {
 		h.mu.Lock()
-		labels := h.labels[runID]
+		labels := maps.Clone(h.labels[runID])
 		h.mu.Unlock()
-		if _, digest, ok := h.RunConfiguration(labels[0], labels[1]); ok {
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		if _, digest, ok := h.RunConfiguration(labels); ok {
 			w.Header().Set(server.HeaderRunConfiguration, digest)
 		}
 	}

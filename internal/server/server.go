@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/qoryai/runner/contracts"
 )
@@ -318,21 +319,19 @@ func (c *Client) Discover(ctx context.Context) (*Configuration, string, error) {
 	return &conf, digest, nil
 }
 
-// RunConfiguration fetches the run configuration from the run section's URL, for the
-// run's forge and repository labels, each sent as a query parameter only when the run
-// has it, and returns it with the server's digest of it. The query is part of the
-// signed target.
-func (c *Client) RunConfiguration(ctx context.Context, runURL, forge, repository string) (*RunConfiguration, string, error) {
+// RunConfiguration fetches the run configuration from the run section's URL for the
+// run's labels, and returns it with the server's digest of it. Every label is one query
+// parameter, its key the name and its value the value, added to any query the URL has,
+// sorted by key and percent-encoded; no label is no query. Which labels name what the
+// run works on is the server's to decide. The query is part of the signed target.
+func (c *Client) RunConfiguration(ctx context.Context, runURL string, labels map[string]string) (*RunConfiguration, string, error) {
 	u, err := url.Parse(runURL)
 	if err != nil {
 		return nil, "", fmt.Errorf("run configuration %s: %w", runURL, err)
 	}
 	q := u.Query()
-	if forge != "" {
-		q.Set("forge", forge)
-	}
-	if repository != "" {
-		q.Set("repository", repository)
+	for k, v := range labels {
+		q.Set(k, v)
 	}
 	u.RawQuery = q.Encode()
 	var rc RunConfiguration
@@ -346,6 +345,31 @@ func (c *Client) RunConfiguration(ctx context.Context, runURL, forge, repository
 		return nil, "", &DocumentError{"run configuration", u.String(), fmt.Errorf("the %s header is not sha256= and 64 hex digits", HeaderRunConfiguration)}
 	}
 	return &rc, digest, nil
+}
+
+// MaxLabels is how many labels a run may carry.
+const MaxLabels = 16
+
+// labelKeyShape is a label key's form.
+var labelKeyShape = regexp.MustCompile(`^[a-z0-9_.-]{1,64}$`)
+
+// CheckLabels refuses labels the contract's schema would: too many, a key outside its
+// grammar, a value longer than 256 bytes or not UTF-8. The runner checks a run's labels
+// with it before they are sent, and the receiver the labels a run configuration request
+// carries.
+func CheckLabels(labels map[string]string) error {
+	if len(labels) > MaxLabels {
+		return fmt.Errorf("%d labels; a run carries at most %d", len(labels), MaxLabels)
+	}
+	for k, v := range labels {
+		if !labelKeyShape.MatchString(k) {
+			return fmt.Errorf("the label key %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", k)
+		}
+		if len(v) > 256 || !utf8.ValidString(v) {
+			return fmt.Errorf("the value of the label %s is longer than 256 bytes or not UTF-8", k)
+		}
+	}
+	return nil
 }
 
 // digestShape is the shape of a server's digest as the events record it.

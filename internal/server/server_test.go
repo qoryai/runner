@@ -3,8 +3,10 @@ package server_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -214,40 +216,81 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	}
 }
 
-// TestRunConfigurationSignsTheQueryItSends pins the run configuration fetch: the labels
-// go as query parameters, only the ones the run has, encoded, and the target signed is
-// the target sent; the document is decoded with its raw policy and the digest read.
+// TestRunConfigurationSignsTheQueryItSends pins the run configuration fetch: every
+// label of the run is one query parameter, sorted by key and encoded, an empty value
+// included, added to the run URL's own query, and the target signed is the target
+// sent; the document is decoded with its raw policy and the digest read.
 func TestRunConfigurationSignsTheQueryItSends(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
-	rc, digest, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", "github.com", "acme/shop")
+	run := v.srv.URL + "/v1/run-configuration"
+	rc, digest, err := c.RunConfiguration(context.Background(), run, map[string]string{"repository": "acme/shop", "issue": "77", "forge": "github.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if digest != "sha256="+strings.Repeat("0", 64) || rc.Version != 1 || !strings.Contains(string(rc.SecurityPolicy), `"api.example"`) {
 		t.Errorf("run configuration %+v, digest %s", rc, digest)
 	}
-	if got := v.seen.URL.RequestURI(); got != "/v1/run-configuration?forge=github.com&repository=acme%2Fshop" {
-		t.Errorf("target %s", got)
-	}
-	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", "", "acme/shop"); err != nil {
-		t.Fatal(err)
-	}
-	if got := v.seen.URL.RequestURI(); got != "/v1/run-configuration?repository=acme%2Fshop" {
-		t.Errorf("target with one label %s", got)
-	}
-	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if got := v.seen.URL.RequestURI(); got != "/v1/run-configuration" {
-		t.Errorf("target with no label %s", got)
+	// The targets of the signed fixtures, revision 2 and revision 1 for the two labels
+	// it carried, then the edges.
+	for _, tc := range []struct {
+		run    string
+		labels map[string]string
+		want   string
+	}{
+		{run, map[string]string{"repository": "acme/shop", "issue": "77", "forge": "github.com"}, signedFixture(t, "get-run-configuration-labels-valid").Target},
+		{run, map[string]string{"forge": "github.com", "repository": "acme/shop"}, signedFixture(t, "get-run-configuration-valid").Target},
+		{run, map[string]string{"run_key": "queue/1 2", "note": "", "k.v-x_y": "\u00fc&="}, "/v1/run-configuration?k.v-x_y=%C3%BC%26%3D&note=&run_key=queue%2F1+2"},
+		{run + "?tenant=a&issue=0", map[string]string{"issue": "77"}, "/v1/run-configuration?issue=77&tenant=a"},
+		{run, map[string]string{}, "/v1/run-configuration"},
+		{run, nil, "/v1/run-configuration"},
+	} {
+		if _, _, err := c.RunConfiguration(context.Background(), tc.run, tc.labels); err != nil {
+			t.Fatal(err)
+		}
+		if got := v.seen.URL.RequestURI(); got != tc.want {
+			t.Errorf("labels %v: target %s, want %s", tc.labels, got, tc.want)
+		}
 	}
 	v.runDoc = `{"version":1}`
-	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", "", ""); err == nil || !strings.Contains(err.Error(), "security_policy") {
+	if _, _, err := c.RunConfiguration(context.Background(), run, nil); err == nil || !strings.Contains(err.Error(), "security_policy") {
 		t.Errorf("a run configuration without a policy: %v", err)
 	}
-	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/missing", "", ""); err == nil || !strings.Contains(err.Error(), "status 404") {
+	if _, _, err := c.RunConfiguration(context.Background(), v.srv.URL+"/v1/missing", nil); err == nil || !strings.Contains(err.Error(), "status 404") {
 		t.Errorf("a run URL that does not answer: %v", err)
+	}
+}
+
+// TestLabelsBoundTheQuery pins the bound the contract states: the longest labels a run
+// may carry, sixteen keys of 64 bytes and values of 256 bytes that all need encoding,
+// make a query of 13,343 bytes, and one more label or byte is refused.
+func TestLabelsBoundTheQuery(t *testing.T) {
+	v := newVerified(t)
+	labels := map[string]string{}
+	for i := range server.MaxLabels {
+		labels[fmt.Sprintf("%02d", i)+strings.Repeat("k", 62)] = strings.Repeat("\u00e9", 128)
+	}
+	if err := server.CheckLabels(labels); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := v.client().RunConfiguration(context.Background(), v.srv.URL+"/v1/run-configuration", labels); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(v.seen.URL.RawQuery); n != 13343 {
+		t.Errorf("the longest query is %d bytes, the contract says 13343", n)
+	}
+	for name, change := range map[string]func(map[string]string){
+		"a seventeenth label": func(l map[string]string) { l["x"] = "" },
+		"a longer value":      func(l map[string]string) { l["00"+strings.Repeat("k", 62)] += "x" },
+		"a longer key":        func(l map[string]string) { l[strings.Repeat("k", 65)] = ""; delete(l, "00"+strings.Repeat("k", 62)) },
+		"an upper-case key":   func(l map[string]string) { l["Forge"] = ""; delete(l, "00"+strings.Repeat("k", 62)) },
+		"a value not UTF-8":   func(l map[string]string) { l["00"+strings.Repeat("k", 62)] = "\xff" },
+	} {
+		l := maps.Clone(labels)
+		change(l)
+		if err := server.CheckLabels(l); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
 	}
 }
 
@@ -303,7 +346,7 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 		if _, _, err := c.Discover(context.Background()); err == nil || !strings.Contains(err.Error(), "status 302") {
 			t.Errorf("%s: discovery through a redirect: %v", name, err)
 		}
-		if _, _, err := c.RunConfiguration(context.Background(), origin.URL+"/v1/run-configuration", "", ""); err == nil || !strings.Contains(err.Error(), "status 302") {
+		if _, _, err := c.RunConfiguration(context.Background(), origin.URL+"/v1/run-configuration", nil); err == nil || !strings.Contains(err.Error(), "status 302") {
 			t.Errorf("%s: a run configuration through a redirect: %v", name, err)
 		}
 		status, _, err := c.Deliver(context.Background(), origin.URL+"/v1/events", "d1", []byte("[]"), "")

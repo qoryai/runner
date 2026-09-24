@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 
 	"github.com/qoryai/runner/internal/policy"
@@ -16,12 +17,13 @@ import (
 // from the digests the server's answers carry. One reload runs at a time; answers
 // that arrive during one are coalesced into the next pass.
 type live struct {
-	client            *server.Client
-	forge, repository string
-	report            func(string)
-	ctx               context.Context
-	cancel            context.CancelFunc
-	wg                sync.WaitGroup
+	client *server.Client
+	// labels are the run's, sent on every run configuration request.
+	labels map[string]string
+	report func(string)
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	mu         sync.Mutex
 	conf       *server.Configuration
@@ -49,7 +51,7 @@ func discover(ctx context.Context, cfg *server.Config, spec Spec) (*live, error)
 	if err != nil {
 		return nil, err
 	}
-	l := &live{client: client, forge: spec.Labels["forge"], repository: spec.Labels["repository"], report: spec.Report, conf: conf, confDigest: digest}
+	l := &live{client: client, labels: maps.Clone(spec.Labels), report: spec.Report, conf: conf, confDigest: digest}
 	l.ctx, l.cancel = context.WithCancel(ctx)
 	return l, nil
 }
@@ -57,7 +59,7 @@ func discover(ctx context.Context, cfg *server.Config, spec Spec) (*live, error)
 // fetch fetches the run configuration at runURL for the run's labels and reads its
 // policy, which is then the run's, with the source fetched and the server's digest.
 func (l *live) fetch(ctx context.Context, runURL string) (*policy.Loaded, error) {
-	rc, digest, err := l.client.RunConfiguration(ctx, runURL, l.forge, l.repository)
+	rc, digest, err := l.client.RunConfiguration(ctx, runURL, l.labels)
 	if err != nil {
 		return nil, err
 	}

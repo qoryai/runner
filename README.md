@@ -115,7 +115,7 @@ res, err := session.Run(ctx, session.Spec{
 	Image:   "example.com/agent:1",               // yours: the runtime and the toolchain
 	Limits:  wall.Limits{Memory: "8g", ShmSize: "2g"},  // what the agent may use; zero is the engine's default
 	Timeout: 5 * time.Hour,                       // the runtime is stopped at it; run.exited says so
-	Labels:  map[string]string{"issue": "77"},    // the caller's names for the run, in run.started
+	Labels:  map[string]string{"issue": "77"},    // the caller's names for the run, in run.started and the run configuration request
 	Wall: &wall.Docker{
 		Helper:    linuxBuild,                    // a static Linux build of this program
 		RelayArgs: []string{"relay"},             // the mode of it that calls wall.Relay
@@ -137,7 +137,9 @@ output with the lines `events.jsonl` holds.
 it fetches the server's configuration document with a signed `GET` of
 `/.well-known/qory-configuration`, posts every event where that says, signed and with
 the access key beside the signature, and when the document names a run configuration,
-fetches that and takes its `security_policy` as the run's policy. A server that
+fetches that with every label of the run as its query and takes its `security_policy`
+as the run's policy: which labels name what the run works on is the server's to
+decide. A server that
 answers a later batch with another digest has the runner fetch the run configuration
 again and put it in force while the run goes. A server is a control plane, or a
 receiver of your own: the contract's [server section](contracts/runner/v1/README.md#the-server)
