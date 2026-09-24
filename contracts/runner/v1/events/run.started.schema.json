@@ -28,7 +28,7 @@
     "wall": {"description": "The adapter that built the enclosure the runtime runs in: docker. Absent when there is no wall, where command and dir are the machine's own; present, they are the enclosure's.", "type": "string", "minLength": 1},
     "image": {"description": "The image the enclosure runs, as the run named it. Present with wall.", "type": "string", "minLength": 1},
     "labels": {
-      "description": "The caller's own names for the run, its key in a queue, a repository, an issue, as the command that started the run was given them. The runner copies them and reads nothing into them. Only this event carries them; a receiver keeps them with the run it creates on it.",
+      "description": "The caller's own names for the run, its key in a queue, a repository, an issue, as the command that started the run was given them. The runner copies them and reads nothing into them. Only this event carries them, and the run configuration request carries them as its query; a receiver keeps them with the run it creates on it.",
       "type": "object",
       "maxProperties": 16,
       "propertyNames": {"pattern": "^[a-z0-9_.-]{1,64}$"},

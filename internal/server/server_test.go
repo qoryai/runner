@@ -85,7 +85,7 @@ func TestSignedGETMatchesTheKnownAnswers(t *testing.T) {
 	if got := server.Timestamp(time.Unix(1700000000, 999)); got != "1700000000" {
 		t.Errorf("Timestamp = %s", got)
 	}
-	for _, name := range []string{"get-configuration-valid", "get-run-configuration-valid"} {
+	for _, name := range []string{"get-configuration-valid", "get-run-configuration-valid", "get-run-configuration-labels-valid"} {
 		f := signedFixture(t, name)
 		if !server.VerifyGET(secret, f.Method, f.Target, f.Headers[server.HeaderTimestamp], f.Headers[server.HeaderSignature]) {
 			t.Errorf("%s: the fixture's signature is not what SignGET makes of its target", name)
@@ -144,7 +144,7 @@ func newVerified(t *testing.T) *verified {
 	v.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		v.seen = r
 		v.body, _ = io.ReadAll(r.Body)
-		if r.Header.Get("User-Agent") != "qory-runner/test" || r.Header.Get(server.HeaderAccessKey) != key || r.Header.Get(server.HeaderContractVersion) != "1" {
+		if r.Header.Get("User-Agent") != "qory-runner/test" || r.Header.Get(server.HeaderAccessKey) != key || r.Header.Get(server.HeaderContractVersion) != "2" {
 			t.Errorf("%s %s: headers %v", r.Method, r.URL, r.Header)
 		}
 		if r.Method == http.MethodGet {

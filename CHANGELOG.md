@@ -4,6 +4,21 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [Unreleased]
+
+### Changed
+
+- The contract is `v1` revision 2: the run configuration request carries every label of
+  the run as its query, one parameter per label, sorted by key and percent-encoded,
+  `?forge=github.com&issue=77&repository=acme%2Fshop`, where revision 1 sent `forge` and
+  `repository` alone. The change adds: a server that reads only those two finds them as
+  before. Which labels name what a run works on is the server's to decide; the runner
+  reads nothing into them. The contract states the bound, at most 13,343 bytes of query
+  from sixteen labels, so a server knows the longest request line it can get.
+  `X-Qory-Contract-Version: 2` and `contract_version: 2` in the ping; `contracts.Revision`
+  is 2. A signed fixture of the revision 2 form,
+  `fixtures/signed/get-run-configuration-labels-valid.json`, beside the revision 1 one.
+
 ## [0.4.1] - 2026-09-21
 
 ### Fixed

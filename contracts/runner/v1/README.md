@@ -20,13 +20,18 @@ descriptor are on this side: the objects the command hands the runner and the on
 control plane delivers over the wire, and the compose report `qory` writes is versioned
 the same way. CloudEvents adds its own `specversion: 1.0`, which is not ours to change.
 
-**Revisions.** This is `v1`, revision 1. The runner announces the revision as one
-integer: the header `X-Qory-Contract-Version: 1` on every request to the server, and
-`contract_version: 1` in the ping's data. A runner that sends neither is revision 0,
+**Revisions.** This is `v1`, revision 2. The runner announces the revision as one
+integer: the header `X-Qory-Contract-Version: 2` on every request to the server, and
+`contract_version: 2` in the ping's data. A runner that sends neither is revision 0,
 the runners 0.1.0 to 0.3.0, which had no server. A runner on revision N knows every
 section defined up to N and ignores a section it does not know, and a server may rely
 on the sections up to N and no more. An addition is a new revision; a breaking change
-is `v2`.
+is `v2`. What each revision added:
+
+| Revision | Runner | Adds |
+|---|---|---|
+| 1 | 0.4.0 | the server (§The server): discovery, signed requests, the run configuration fetched with the run's `forge` and `repository` labels as its query, the digests and the reload |
+| 2 | 0.5.0 | the run configuration request carries every label of the run as its query, not two of them (§The server, the run configuration document) |
 
 `v1` is the first generation of this namespace, not a stability promise. The runner
 module is at `v0`, which under Go's rules promises no compatibility, and until it
@@ -148,8 +153,8 @@ One run, on a developer machine, with a server configured:
    server. With no server configured there is no fetch and no ping, and the run starts
    at once, files only.
 4. It settles the policy. When the server's configuration names a `run` section, it
-   fetches the run configuration, with the run's `forge` and `repository` labels as
-   the query, and its `security_policy` is the policy; anything but `200` is no run.
+   fetches the run configuration, with every label of the run as the query, and its
+   `security_policy` is the policy; anything but `200` is no run.
    Otherwise the policy is the one the command gave. It validates the policy once.
    Refused by the schema: the run does not start. Absent: mode `observe`, everything
    allowed and recorded. Present: pinned, with the digest of its canonical JSON as its
@@ -195,8 +200,12 @@ caller's id is a UUID in the canonical lower-case form, since it is every event'
 `subject` and names the run directory, and anything else is no run. What else the caller
 knows the run by, a key in its queue, a repository, an issue, goes in `labels` on
 `ai.qory.run.started`: at most 16, a key of 1 to 64 of `a-z`, `0-9`, `_`, `.` and `-`, a
-value of at most 256 bytes. The runner copies them and reads nothing into them, and no
-other event repeats them: a receiver joins on `subject`.
+value of at most 256 bytes. The runner reads nothing into them. It copies them into
+`ai.qory.run.started`, and no other event repeats them: a receiver joins on `subject`.
+It sends them, all of them, on the run configuration request (§The server), and the
+server decides which labels name what the run works on. The `qory` command, for one,
+labels a run in a git checkout with `forge` and `repository` from its origin remote, and
+a server that keys its policies on those finds them there.
 
 Behind a wall, three steps differ and no event does. Before step 5 the runner asks the
 wall to prepare the enclosure and listens where the enclosure says, not on loopback.
@@ -511,7 +520,7 @@ published key `ak_f1xt0re000000000`.
 |---|---|
 | `User-Agent` | `qory-runner/<version>` |
 | `X-Qory-Access-Key` | the access key |
-| `X-Qory-Contract-Version` | the revision of this contract the runner implements, `1` |
+| `X-Qory-Contract-Version` | the revision of this contract the runner implements, `2` |
 
 **A signed POST**, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers).
 One `POST` per batch to the events URL, with the headers above and:
@@ -573,11 +582,24 @@ offers no run configuration, and the policy is the machine's. A top-level member
 runner does not know is ignored, which is how a later revision adds a section.
 
 **The run configuration document.** `run-configuration.schema.json`. A signed
-`GET <run.url>?forge=<forge label>&repository=<repository label>`, each parameter only
-when the run has that label and no query when it has neither, the values
-percent-encoded as a query is. The answer is `200`, `application/json`, with the
-headers `X-Qory-Run-Configuration: sha256=<hex>` and `ETag: "sha256=<hex>"`, the same
-string, quoted the second time.
+`GET <run.url>?<the run's labels>`: one query parameter per label, the label's key as
+the name and its value as the value, a label with an empty value as `key=`, and no query
+when the run has no label. The parameters are sorted by key and percent-encoded as a
+form is, a space as `+`, so a run labelled `forge: github.com`, `issue: "77"` and
+`repository: acme/shop` fetches `<run.url>?forge=github.com&issue=77&repository=acme%2Fshop`.
+When `run.url` has a query of its own, the labels are added to it, and a label replaces
+a parameter of the same name. The server decides which labels name what the run works
+on and answers the policy for that; the runner reads nothing into them. A revision 1
+runner sent `forge` and `repository` alone, and a server that reads only those finds
+them the same way in either revision. The labels are bounded, at most 16, a key of at
+most 64 bytes that needs no encoding and a value of at most 256 bytes, which is at most
+768 once encoded, so the query the labels make is at most 13,343 bytes; a server whose
+front end limits a request line to less refuses the longest of them. The reference
+receiver, once the request verifies, answers `400` to a query that is not labels by
+these rules: a key sent twice, a key outside the grammar, a value too long or not UTF-8,
+more than 16. The answer is `200`, `application/json`, with the headers
+`X-Qory-Run-Configuration: sha256=<hex>` and `ETag: "sha256=<hex>"`, the same string,
+quoted the second time.
 
 ```json
 {"version": 1,
@@ -608,7 +630,7 @@ The server answers with a status; the body is ignored:
 
 Every answer may carry `X-Qory-Configuration` and `X-Qory-Run-Configuration`, the
 digests in force: of the configuration document, and of the run configuration for the
-run's repository. The runner compares each to what it holds. A different
+run's labels. The runner compares each to what it holds. A different
 run-configuration digest means fetch the run configuration again and apply it; a
 different configuration digest means fetch the configuration document again and use
 its sections from then on, the events URL and the filter for the batches after. A

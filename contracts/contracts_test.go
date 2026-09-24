@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -228,11 +229,12 @@ func TestBatchFixturesValidate(t *testing.T) {
 
 // TestSignedFixtures pins the shape of every request under fixtures/signed, what any
 // receiver is replayed: a method the contract signs, a target from the root, the
-// headers every request carries and the ones its method adds, a body on a POST that is
-// a batch and none on a GET, a status a receiver answers and a note. On a request a
-// receiver accepts, the signature is the HMAC under the published secret, over the body
-// on a POST and over the canonical string on a GET, so the published signatures cannot
-// drift from the fixtures they sign.
+// headers every request carries and the ones its method adds, a revision from 1 to the
+// contract's own, a body on a POST that is a batch and none on a GET, a status a
+// receiver answers and a note. On a request a receiver accepts, the signature is the
+// HMAC under the published secret, over the body on a POST and over the canonical
+// string on a GET, so the published signatures cannot drift from the fixtures they
+// sign.
 func TestSignedFixtures(t *testing.T) {
 	s := compile(t, "batch.schema.json")
 	const secret = "fixture-secret-not-a-real-one"
@@ -270,8 +272,9 @@ func TestSignedFixtures(t *testing.T) {
 		}
 		header("User-Agent")
 		accessKey := header("X-Qory-Access-Key")
-		if v := header("X-Qory-Contract-Version"); v != "1" {
-			t.Errorf("%s: X-Qory-Contract-Version %q; want 1", f, v)
+		v := header("X-Qory-Contract-Version")
+		if n, err := strconv.Atoi(v); err != nil || n < 1 || n > contracts.Revision || strconv.Itoa(n) != v {
+			t.Errorf("%s: X-Qory-Contract-Version %q; want a revision from 1 to %d", f, v, contracts.Revision)
 		}
 		signature := header("X-Qory-Signature-256")
 		var signed []byte
