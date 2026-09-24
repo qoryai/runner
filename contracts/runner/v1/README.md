@@ -296,6 +296,16 @@ nothing reaches the repository, whatever the token itself may do. Rules match th
 and never the query, so the `info/refs` a push asks first is allowed; it lists what a
 fetch already saw.
 
+*What a path rule does not read.* A rule reads the request's path and nothing else:
+not its query, not its headers, not its body. What a request names there, the rule does
+not see: a subresource asked for in the query, `?acl` say; a listing whose prefix is a
+query parameter, on a host that lists at `/`; a copy that names its source in a header,
+which writes under an allowed path what it read from another; a GraphQL body that names
+any repository the token reaches. A path rule holds a run to the paths it names, and
+promises nothing about the rest. That is bounded by the credential's own scope, or by
+what serves the host, and whoever writes the policy for a host that takes such requests
+checks them there or leaves the host out.
+
 ## Credentials
 
 A credential is a token the runner holds for the session and the session never holds.
@@ -826,8 +836,8 @@ for all of them.
 When the run has an authority of its own (§Credentials), a wall gives the enclosure
 one bundle to trust, the image's own authorities with the run's certificate after them,
 and points the variables programs read a bundle's path from at it: `SSL_CERT_FILE`,
-`GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`
-unless the caller names others. The bundle is the image's and one more, never the run's
+`GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and
+`AWS_CA_BUNDLE` unless the caller names others. The bundle is the image's and one more, never the run's
 alone, because those variables replace a program's trust and do not add to it; an image
 that keeps a bundle nowhere known gets the run's alone and reaches only the terminated
 hosts over TLS, which is the image's to mend. The authority's key never crosses.

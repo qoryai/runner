@@ -4,6 +4,20 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [Unreleased]
+
+### Changed
+
+- A wall points `AWS_CA_BUNDLE` at the run's bundle as well, beside `SSL_CERT_FILE`,
+  `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`.
+  The AWS CLI and botocore read `REQUESTS_CA_BUNDLE` only when neither `AWS_CA_BUNDLE`
+  nor `ca_bundle` in the image's AWS configuration is set, so an image that names a
+  bundle of its own there did not trust a terminated host. A caller that names its own
+  variables in `Docker.CAEnv` gets those, as before.
+- The contract says what a path rule does not read: a request's query, headers and
+  body. A subresource in the query, a listing's prefix, a copy's source in a header and
+  a GraphQL body are outside what a rule holds a run to.
+
 ## [0.5.1] - 2026-09-24
 
 ### Upgrading
