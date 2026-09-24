@@ -200,7 +200,7 @@ func (e *dockerEnclosure) inside() string  { return e.base + "-in" }
 func (e *dockerEnclosure) outside() string { return e.base + "-out" }
 func (e *dockerEnclosure) relay() string   { return e.base + "-relay" }
 func (e *dockerEnclosure) agent() string   { return e.base + "-agent" }
-func (e *dockerEnclosure) label() string   { return "ai.qory.run=" + e.req.RunID }
+func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunID }
 
 // docker runs one docker command; a failure carries what the command printed.
 func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, error) {

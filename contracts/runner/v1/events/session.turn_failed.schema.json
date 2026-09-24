@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/session.turn_failed.schema.json",
-  "title": "ai.qory.session.turn_failed",
+  "title": "dev.qory.session.turn_failed",
   "description": "A turn ended on an error from the model's API rather than on a response.",
   "type": "object",
   "additionalProperties": false,

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/run.started.schema.json",
-  "title": "ai.qory.run.started",
+  "title": "dev.qory.run.started",
   "description": "The runtime is about to start. The first event of a run in the file, and the event a receiver creates the run on.",
   "type": "object",
   "additionalProperties": false,
@@ -14,7 +14,7 @@
     "dir": {"description": "The working directory the runtime starts in.", "type": "string", "minLength": 1},
     "interactive": {"description": "True when the session runs on a pseudo-terminal, false on pipes.", "type": "boolean"},
     "terminal": {
-      "description": "The size of the pseudo-terminal the runtime starts on: the runner's own terminal's when it has one, 80 by 24 otherwise. Present when interactive is true, absent on pipes. Each later change is one ai.qory.run.resized.",
+      "description": "The size of the pseudo-terminal the runtime starts on: the runner's own terminal's when it has one, 80 by 24 otherwise. Present when interactive is true, absent on pipes. Each later change is one dev.qory.run.resized.",
       "type": "object",
       "additionalProperties": false,
       "required": ["cols", "rows"],

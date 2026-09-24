@@ -169,7 +169,7 @@ type Run struct {
 // Wants reports whether the events section asks for events of the type: every type
 // when it holds "*", else the listed ones. The ping is always wanted.
 func (c *Configuration) Wants(typ string) bool {
-	if typ == "ai.qory.ping" {
+	if typ == "dev.qory.ping" {
 		return true
 	}
 	for _, e := range c.Events.Types {

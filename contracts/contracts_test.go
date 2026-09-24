@@ -187,7 +187,7 @@ func TestRecordedRunValidates(t *testing.T) {
 				t.Errorf("%s: line %d: subject %v and source %v do not name the directory",
 					dir, i+1, m["subject"], m["source"])
 			}
-			if m["type"] == "ai.qory.run.log" {
+			if m["type"] == "dev.qory.run.log" {
 				chunk, err := base64Decode(m["data"].(map[string]any)["bytes"].(string))
 				if err != nil {
 					t.Fatal(err)
@@ -196,10 +196,10 @@ func TestRecordedRunValidates(t *testing.T) {
 			}
 		}
 		first := events[0].(map[string]any)["type"]
-		if first != "ai.qory.ping" && first != "ai.qory.run.started" {
+		if first != "dev.qory.ping" && first != "dev.qory.run.started" {
 			t.Errorf("%s: first event is %v; want ping or run.started", dir, first)
 		}
-		if last := events[len(events)-1].(map[string]any)["type"]; last != "ai.qory.run.exited" {
+		if last := events[len(events)-1].(map[string]any)["type"]; last != "dev.qory.run.exited" {
 			t.Errorf("%s: last event is %v; want run.exited", dir, last)
 		}
 		out, err := fs.ReadFile(contracts.FS, path.Join(dir, "output.log"))
@@ -413,7 +413,7 @@ func TestDescriptorsHaveFixturesThatValidate(t *testing.T) {
 				if !produces[typ] {
 					t.Errorf("%s: expected/events.jsonl:%d: no rule produces %s", cdir, i+1, typ)
 				}
-				name := strings.TrimPrefix(typ, "ai.qory.") + ".schema.json"
+				name := strings.TrimPrefix(typ, "dev.qory.") + ".schema.json"
 				schema, err := c.Compile(contracts.Base + "/events/" + name)
 				if err != nil {
 					t.Errorf("%s: expected/events.jsonl:%d: %v", cdir, i+1, err)
@@ -449,7 +449,7 @@ func TestEveryTypeHasASchemaAndTheReadmeNamesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, typ := range types {
-		name := strings.TrimPrefix(typ, "ai.qory.")
+		name := strings.TrimPrefix(typ, "dev.qory.")
 		if _, err := fs.Stat(contracts.FS, "events/"+name+".schema.json"); err != nil {
 			t.Errorf("%s: %v", typ, err)
 		}

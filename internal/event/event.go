@@ -25,19 +25,19 @@ const Base = "https://qory.dev/contracts/runner/v1"
 // The event types of the contract. A type name is stable; a breaking change to its data
 // is a new type.
 const (
-	Ping          = "ai.qory.ping"
-	RunStarted    = "ai.qory.run.started"
-	RunHeartbeat  = "ai.qory.run.heartbeat"
-	RunLog        = "ai.qory.run.log"
-	RunResized    = "ai.qory.run.resized"
-	RunEgress     = "ai.qory.run.egress"
-	PolicyApplied = "ai.qory.run.policy_applied"
-	RunExited     = "ai.qory.run.exited"
+	Ping          = "dev.qory.ping"
+	RunStarted    = "dev.qory.run.started"
+	RunHeartbeat  = "dev.qory.run.heartbeat"
+	RunLog        = "dev.qory.run.log"
+	RunResized    = "dev.qory.run.resized"
+	RunEgress     = "dev.qory.run.egress"
+	PolicyApplied = "dev.qory.run.policy_applied"
+	RunExited     = "dev.qory.run.exited"
 )
 
 // Prefix is what every type of the contract starts with; a descriptor's session types
 // carry it too.
-const Prefix = "ai.qory."
+const Prefix = "dev.qory."
 
 // Event is one CloudEvents 1.0 event in the JSON format, with the attributes the
 // contract fixes. Data is any value that encodes to a JSON object.

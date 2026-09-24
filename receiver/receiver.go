@@ -310,7 +310,7 @@ func (h *Handler) deliver(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusGone)
 			return
 		}
-		if head.Type == "ai.qory.run.started" {
+		if head.Type == "dev.qory.run.started" {
 			h.mu.Lock()
 			if h.labels == nil {
 				h.labels = map[string]map[string]string{}

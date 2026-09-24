@@ -167,18 +167,18 @@
             "description": "The session event type produced.",
             "type": "string",
             "enum": [
-              "ai.qory.session.started",
-              "ai.qory.session.prompt_submitted",
-              "ai.qory.session.tool_started",
-              "ai.qory.session.tool_finished",
-              "ai.qory.session.tool_failed",
-              "ai.qory.session.turn_finished",
-              "ai.qory.session.turn_failed",
-              "ai.qory.session.subagent_started",
-              "ai.qory.session.subagent_finished",
-              "ai.qory.session.notification",
-              "ai.qory.session.ended",
-              "ai.qory.session.result"
+              "dev.qory.session.started",
+              "dev.qory.session.prompt_submitted",
+              "dev.qory.session.tool_started",
+              "dev.qory.session.tool_finished",
+              "dev.qory.session.tool_failed",
+              "dev.qory.session.turn_finished",
+              "dev.qory.session.turn_failed",
+              "dev.qory.session.subagent_started",
+              "dev.qory.session.subagent_finished",
+              "dev.qory.session.notification",
+              "dev.qory.session.ended",
+              "dev.qory.session.result"
             ]
           },
           "data": {

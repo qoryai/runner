@@ -56,7 +56,7 @@ func TestDockerConforms(t *testing.T) {
 		Leftovers: func(runID string) ([]string, error) {
 			var left []string
 			for _, list := range [][]string{{"ps", "--all", "--quiet"}, {"network", "ls", "--quiet"}} {
-				out, err := exec.Command(command, append(list, "--filter", "label=ai.qory.run="+runID)...).CombinedOutput()
+				out, err := exec.Command(command, append(list, "--filter", "label=dev.qory.run="+runID)...).CombinedOutput()
 				if err != nil {
 					return nil, err
 				}

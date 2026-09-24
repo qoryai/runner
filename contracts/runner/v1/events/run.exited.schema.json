@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/run.exited.schema.json",
-  "title": "ai.qory.run.exited",
+  "title": "dev.qory.run.exited",
   "description": "The runtime exited. The result of the run and its last event.",
   "type": "object",
   "additionalProperties": false,

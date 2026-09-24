@@ -305,7 +305,7 @@ func TestDockerReapsWhatARunLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Join(rec.lines, "\n")
-	ps, ls := strings.Index(got, "ps --all --quiet --filter label=ai.qory.run="+runID), strings.Index(got, "network ls --quiet --filter label=ai.qory.run="+runID)
+	ps, ls := strings.Index(got, "ps --all --quiet --filter label=dev.qory.run="+runID), strings.Index(got, "network ls --quiet --filter label=dev.qory.run="+runID)
 	if ps < 0 || ls < ps {
 		t.Errorf("the reap asked:\n%s", got)
 	}

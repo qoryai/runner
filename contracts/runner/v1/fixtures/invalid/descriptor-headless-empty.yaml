@@ -10,6 +10,6 @@ headless:
 rules:
   - source: output
     match: {type: result}
-    type: ai.qory.session.result
+    type: dev.qory.session.result
     data:
       session_id: session_id

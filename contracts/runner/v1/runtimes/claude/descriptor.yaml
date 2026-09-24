@@ -39,7 +39,7 @@ headless:
 rules:
   - source: hooks
     match: {hook_event_name: SessionStart}
-    type: ai.qory.session.started
+    type: dev.qory.session.started
     data:
       session_id: session_id
       source: source
@@ -48,7 +48,7 @@ rules:
       agent_type: agent_type
   - source: hooks
     match: {hook_event_name: UserPromptSubmit}
-    type: ai.qory.session.prompt_submitted
+    type: dev.qory.session.prompt_submitted
     data:
       session_id: session_id
       prompt: prompt
@@ -56,7 +56,7 @@ rules:
       agent_type: agent_type
   - source: hooks
     match: {hook_event_name: PreToolUse}
-    type: ai.qory.session.tool_started
+    type: dev.qory.session.tool_started
     data:
       session_id: session_id
       tool: tool_name
@@ -66,7 +66,7 @@ rules:
       agent_type: agent_type
   - source: hooks
     match: {hook_event_name: PostToolUse}
-    type: ai.qory.session.tool_finished
+    type: dev.qory.session.tool_finished
     data:
       session_id: session_id
       tool: tool_name
@@ -78,7 +78,7 @@ rules:
       agent_type: agent_type
   - source: hooks
     match: {hook_event_name: PostToolUseFailure}
-    type: ai.qory.session.tool_failed
+    type: dev.qory.session.tool_failed
     data:
       session_id: session_id
       tool: tool_name
@@ -91,14 +91,14 @@ rules:
       agent_type: agent_type
   - source: hooks
     match: {hook_event_name: SubagentStart}
-    type: ai.qory.session.subagent_started
+    type: dev.qory.session.subagent_started
     data:
       session_id: session_id
       agent_id: agent_id
       agent_type: agent_type
   - source: hooks
     match: {hook_event_name: SubagentStop}
-    type: ai.qory.session.subagent_finished
+    type: dev.qory.session.subagent_finished
     data:
       session_id: session_id
       agent_id: agent_id
@@ -107,7 +107,7 @@ rules:
       background_tasks: background_tasks
   - source: hooks
     match: {hook_event_name: Stop}
-    type: ai.qory.session.turn_finished
+    type: dev.qory.session.turn_finished
     data:
       session_id: session_id
       message: last_assistant_message
@@ -116,7 +116,7 @@ rules:
       agent_type: agent_type
   - source: hooks
     match: {hook_event_name: StopFailure}
-    type: ai.qory.session.turn_failed
+    type: dev.qory.session.turn_failed
     data:
       session_id: session_id
       error: error
@@ -126,7 +126,7 @@ rules:
       agent_type: agent_type
   - source: hooks
     match: {hook_event_name: Notification}
-    type: ai.qory.session.notification
+    type: dev.qory.session.notification
     data:
       session_id: session_id
       kind: notification_type
@@ -136,7 +136,7 @@ rules:
       agent_type: agent_type
   - source: hooks
     match: {hook_event_name: SessionEnd}
-    type: ai.qory.session.ended
+    type: dev.qory.session.ended
     data:
       session_id: session_id
       reason: reason
@@ -144,7 +144,7 @@ rules:
       agent_type: agent_type
   - source: output
     match: {type: result}
-    type: ai.qory.session.result
+    type: dev.qory.session.result
     data:
       session_id: session_id
       outcome: subtype

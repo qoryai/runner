@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/run.log.schema.json",
-  "title": "ai.qory.run.log",
+  "title": "dev.qory.run.log",
   "description": "One chunk of the session's output. On pipes: one line or 4096 bytes, whichever comes first, cut at a byte, so a multibyte character may straddle two chunks. On a pseudo-terminal: 4096 bytes or a quiet gap of 50 ms after the runtime's last write, whichever comes first, never cut inside a multibyte character, and a line break cuts nothing. The bytes are the runtime's, uninterpreted; output.log is their concatenation in sequence order.",
   "type": "object",
   "additionalProperties": false,

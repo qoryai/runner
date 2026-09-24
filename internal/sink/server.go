@@ -56,7 +56,7 @@ type Target struct {
 
 // Wants reports whether the target asks for events of the type.
 func (t Target) Wants(typ string) bool {
-	if typ == "ai.qory.ping" {
+	if typ == "dev.qory.ping" {
 		return true
 	}
 	for _, e := range t.Types {

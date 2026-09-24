@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/run.egress.schema.json",
-  "title": "ai.qory.run.egress",
+  "title": "dev.qory.run.egress",
   "description": "One connection the session asked the proxy for, with the decision, the rule that made it and what became of it. Every connection is one event, allowed or denied. To a host the proxy terminates TLS for, every request is one event instead, with its path.",
   "type": "object",
   "additionalProperties": false,

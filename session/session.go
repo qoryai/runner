@@ -84,7 +84,7 @@ type Spec struct {
 	// run whose certificate the enclosure is given to trust.
 	Credentials []Credential
 	// Declared is the egress the harness declared, nil when nothing was. It is
-	// reported in ai.qory.run.policy_applied as harness_hosts and decides nothing:
+	// reported in dev.qory.run.policy_applied as harness_hosts and decides nothing:
 	// the policy alone decides.
 	Declared []string
 	// RunsDir holds the run directories; empty means Dir/.qory/runs.

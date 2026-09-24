@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/run.policy_applied.schema.json",
-  "title": "ai.qory.run.policy_applied",
+  "title": "dev.qory.run.policy_applied",
   "description": "The policy the run is pinned to, as read before the runtime started, with where it came from. Emitted once at the start, and again at the sequence where a new run configuration from the server took effect.",
   "type": "object",
   "additionalProperties": false,

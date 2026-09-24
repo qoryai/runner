@@ -38,26 +38,26 @@
         "type": {
           "type": "string",
           "enum": [
-            "ai.qory.ping",
-            "ai.qory.run.started",
-            "ai.qory.run.heartbeat",
-            "ai.qory.run.log",
-            "ai.qory.run.resized",
-            "ai.qory.run.egress",
-            "ai.qory.run.policy_applied",
-            "ai.qory.run.exited",
-            "ai.qory.session.started",
-            "ai.qory.session.prompt_submitted",
-            "ai.qory.session.tool_started",
-            "ai.qory.session.tool_finished",
-            "ai.qory.session.tool_failed",
-            "ai.qory.session.turn_finished",
-            "ai.qory.session.turn_failed",
-            "ai.qory.session.subagent_started",
-            "ai.qory.session.subagent_finished",
-            "ai.qory.session.notification",
-            "ai.qory.session.ended",
-            "ai.qory.session.result"
+            "dev.qory.ping",
+            "dev.qory.run.started",
+            "dev.qory.run.heartbeat",
+            "dev.qory.run.log",
+            "dev.qory.run.resized",
+            "dev.qory.run.egress",
+            "dev.qory.run.policy_applied",
+            "dev.qory.run.exited",
+            "dev.qory.session.started",
+            "dev.qory.session.prompt_submitted",
+            "dev.qory.session.tool_started",
+            "dev.qory.session.tool_finished",
+            "dev.qory.session.tool_failed",
+            "dev.qory.session.turn_finished",
+            "dev.qory.session.turn_failed",
+            "dev.qory.session.subagent_started",
+            "dev.qory.session.subagent_finished",
+            "dev.qory.session.notification",
+            "dev.qory.session.ended",
+            "dev.qory.session.result"
           ]
         },
         "subject": {
@@ -77,7 +77,7 @@
           "pattern": "^[0-9]{10}$"
         },
         "dataschema": {
-          "description": "The schema of data: events/<type without the ai.qory. prefix>.schema.json under this contract's base.",
+          "description": "The schema of data: events/<type without the dev.qory. prefix>.schema.json under this contract's base.",
           "type": "string",
           "format": "uri"
         },
@@ -95,7 +95,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.ping"
+              "const": "dev.qory.ping"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/ping.schema.json"
@@ -108,7 +108,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.run.started"
+              "const": "dev.qory.run.started"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/run.started.schema.json"
@@ -121,7 +121,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.run.heartbeat"
+              "const": "dev.qory.run.heartbeat"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/run.heartbeat.schema.json"
@@ -134,7 +134,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.run.log"
+              "const": "dev.qory.run.log"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/run.log.schema.json"
@@ -147,7 +147,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.run.resized"
+              "const": "dev.qory.run.resized"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/run.resized.schema.json"
@@ -160,7 +160,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.run.egress"
+              "const": "dev.qory.run.egress"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/run.egress.schema.json"
@@ -173,7 +173,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.run.policy_applied"
+              "const": "dev.qory.run.policy_applied"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/run.policy_applied.schema.json"
@@ -186,7 +186,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.run.exited"
+              "const": "dev.qory.run.exited"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/run.exited.schema.json"
@@ -199,7 +199,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.started"
+              "const": "dev.qory.session.started"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.started.schema.json"
@@ -212,7 +212,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.prompt_submitted"
+              "const": "dev.qory.session.prompt_submitted"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.prompt_submitted.schema.json"
@@ -225,7 +225,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.tool_started"
+              "const": "dev.qory.session.tool_started"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.tool_started.schema.json"
@@ -238,7 +238,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.tool_finished"
+              "const": "dev.qory.session.tool_finished"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.tool_finished.schema.json"
@@ -251,7 +251,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.tool_failed"
+              "const": "dev.qory.session.tool_failed"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.tool_failed.schema.json"
@@ -264,7 +264,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.turn_finished"
+              "const": "dev.qory.session.turn_finished"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.turn_finished.schema.json"
@@ -277,7 +277,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.turn_failed"
+              "const": "dev.qory.session.turn_failed"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.turn_failed.schema.json"
@@ -290,7 +290,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.subagent_started"
+              "const": "dev.qory.session.subagent_started"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.subagent_started.schema.json"
@@ -303,7 +303,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.subagent_finished"
+              "const": "dev.qory.session.subagent_finished"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.subagent_finished.schema.json"
@@ -316,7 +316,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.notification"
+              "const": "dev.qory.session.notification"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.notification.schema.json"
@@ -329,7 +329,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.ended"
+              "const": "dev.qory.session.ended"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.ended.schema.json"
@@ -342,7 +342,7 @@
         {
           "properties": {
             "type": {
-              "const": "ai.qory.session.result"
+              "const": "dev.qory.session.result"
             },
             "dataschema": {
               "const": "https://qory.dev/contracts/runner/v1/events/session.result.schema.json"
