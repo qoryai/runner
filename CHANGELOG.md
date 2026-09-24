@@ -4,7 +4,7 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
-## [Unreleased]
+## [0.5.0] - 2026-09-24
 
 ### Upgrading
 
@@ -401,7 +401,8 @@ release may change what an existing document does, and says so under Upgrading.
   It names the policy's `egress.allow` grammar as the one definition of a declared host,
   which the harness contract copies.
 
-[Unreleased]: https://github.com/qoryai/runner/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/qoryai/runner/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/qoryai/runner/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/qoryai/runner/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/qoryai/runner/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/qoryai/runner/compare/v0.2.0...v0.3.0
