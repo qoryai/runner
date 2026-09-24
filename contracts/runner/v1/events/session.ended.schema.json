@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/session.ended.schema.json",
-  "title": "ai.qory.session.ended",
+  "title": "dev.qory.session.ended",
   "description": "The runtime closed its session.",
   "type": "object",
   "additionalProperties": false,

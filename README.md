@@ -44,7 +44,7 @@ server:                                 # optional
   secret: sixteen-characters-at-least   # or QORY_SERVER_SECRET in the environment
 ```
 
-A denied connection is one `403` to the runtime and one `ai.qory.run.egress` event with
+A denied connection is one `403` to the runtime and one `dev.qory.run.egress` event with
 `decision: denied`; the session goes on. Nothing the runner does ends a session.
 
 The proxy sees only programs that honour it. A `wall` section, or
@@ -210,7 +210,7 @@ export ANTHROPIC_API_KEY=...            # a key, or CLAUDE_CODE_OAUTH_TOKEN from
 qory run --wall docker --image agent:1 --env ANTHROPIC_API_KEY claude -- -p "Reply pong"
 ```
 
-The run is recorded in `.qory/runs/<id>/` as without a wall, `ai.qory.run.started` names
+The run is recorded in `.qory/runs/<id>/` as without a wall, `dev.qory.run.started` names
 the wall and the image, and the exit status is the agent's. Two things differ by machine:
 
 - **On Linux** `qory` mounts itself into the container as the relay and the hook

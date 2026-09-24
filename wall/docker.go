@@ -200,7 +200,7 @@ func (e *dockerEnclosure) inside() string  { return e.base + "-in" }
 func (e *dockerEnclosure) outside() string { return e.base + "-out" }
 func (e *dockerEnclosure) relay() string   { return e.base + "-relay" }
 func (e *dockerEnclosure) agent() string   { return e.base + "-agent" }
-func (e *dockerEnclosure) label() string   { return "ai.qory.run=" + e.req.RunID }
+func (e *dockerEnclosure) label() string   { return "dev.qory.run=" + e.req.RunID }
 
 // docker runs one docker command; a failure carries what the command printed.
 func (e *dockerEnclosure) docker(ctx context.Context, args ...string) ([]byte, error) {
@@ -545,6 +545,10 @@ func (e *dockerEnclosure) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// oldLabel is the key the run's label had before 0.5.1. A reap looks for it as well, so
+// what a runner before 0.5.1 left is removed by a runner after it.
+const oldLabel = "ai.qory.run="
+
 // Reap removes the containers and the networks that carry the run's label: what a
 // runner that died left behind. The containers go first, since a network in use stays.
 func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
@@ -564,17 +568,19 @@ func (d *Docker) Reap(ctx context.Context, runID string) (int, error) {
 		{[]string{"ps", "--all", "--quiet"}, []string{"rm", "--force", "--volumes"}},
 		{[]string{"network", "ls", "--quiet"}, []string{"network", "rm"}},
 	} {
-		out, err := e.docker(ctx, append(kind.list, "--filter", "label="+e.label())...)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		for _, id := range strings.Fields(string(out)) {
-			if _, err := e.docker(ctx, append(append([]string{}, kind.remove...), id)...); err != nil {
+		for _, label := range []string{e.label(), oldLabel + runID} {
+			out, err := e.docker(ctx, append(append([]string{}, kind.list...), "--filter", "label="+label)...)
+			if err != nil {
 				errs = append(errs, err)
 				continue
 			}
-			removed++
+			for _, id := range strings.Fields(string(out)) {
+				if _, err := e.docker(ctx, append(append([]string{}, kind.remove...), id)...); err != nil {
+					errs = append(errs, err)
+					continue
+				}
+				removed++
+			}
 		}
 	}
 	return removed, errors.Join(errs...)

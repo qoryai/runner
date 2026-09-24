@@ -30,7 +30,7 @@
           "minItems": 1,
           "items": {
             "type": "string",
-            "pattern": "^(\\*|ai\\.qory\\.[a-z_]+(\\.[a-z_]+)*)$"
+            "pattern": "^(\\*|dev\\.qory\\.[a-z_]+(\\.[a-z_]+)*)$"
           }
         }
       }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/qoryai/runner/internal/event"
@@ -147,6 +148,12 @@ type recorded struct {
 	line     []byte
 }
 
+// oldPrefix is what every type started with before 0.5.1, and what the record of a run
+// a runner before 0.5.1 wrote still carries. Sending that record again reads each of its
+// types, and sends each of its events, under the prefix of today, so its run.exited is
+// found and a server gets the types it asked for. The file keeps what was written.
+const oldPrefix = "ai.qory."
+
 // record reads the events file. A last line the runner died in the middle of is cut
 // off the file: it is no event, and the next one must start a line.
 func record(file string) ([]recorded, error) {
@@ -169,6 +176,10 @@ func record(file string) ([]recorded, error) {
 		}
 		good += int64(len(line))
 		l.line = bytes.TrimSuffix(line, []byte("\n"))
+		if rest, ok := strings.CutPrefix(l.Type, oldPrefix); ok {
+			l.Type = event.Prefix + rest
+			l.line = bytes.Replace(l.line, []byte(`"type":"`+oldPrefix), []byte(`"type":"`+event.Prefix), 1)
+		}
 		out = append(out, l)
 	}
 	if info, err := f.Stat(); err == nil && info.Size() > good {

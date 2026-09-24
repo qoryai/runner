@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/ping.schema.json",
-  "title": "ai.qory.ping",
+  "title": "dev.qory.ping",
   "description": "Sent to the server's events endpoint before the runtime starts, when a server is configured. The server answers 2xx or the run does not start.",
   "type": "object",
   "additionalProperties": false,

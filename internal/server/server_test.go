@@ -199,11 +199,11 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	if digest != "sha256=c0" || conf.Events.URL != v.srv.URL+"/v1/events" || len(conf.Events.Types) != 1 || conf.Run == nil || conf.Run.URL != v.srv.URL+"/v1/run-configuration" {
 		t.Errorf("discovered %+v, digest %s", conf, digest)
 	}
-	if !conf.Wants("ai.qory.run.log") || !conf.Wants("ai.qory.ping") {
+	if !conf.Wants("dev.qory.run.log") || !conf.Wants("dev.qory.ping") {
 		t.Error("the filter refused an event of a configuration with *")
 	}
-	conf.Events.Types = []string{"ai.qory.run.started"}
-	if conf.Wants("ai.qory.run.log") || !conf.Wants("ai.qory.run.started") || !conf.Wants("ai.qory.ping") {
+	conf.Events.Types = []string{"dev.qory.run.started"}
+	if conf.Wants("dev.qory.run.log") || !conf.Wants("dev.qory.run.started") || !conf.Wants("dev.qory.ping") {
 		t.Error("the filter of a listed configuration is wrong")
 	}
 	c.Config.URL = v.srv.URL + "/elsewhere"

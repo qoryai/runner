@@ -23,7 +23,7 @@ func TestAnExpressionIsRefused(t *testing.T) {
 // nested paths, and no match on a missing path.
 func TestMatchIsEqualityOrPresenceOnly(t *testing.T) {
 	d := &descriptor.Descriptor{Rules: []descriptor.Rule{
-		{Source: "output", Match: map[string]any{"type": "result", "num_turns": 1, "ok": true, "meta.kind": map[string]any{"present": true}}, Type: "ai.qory.session.result", Data: map[string]string{"n": "num_turns", "k": "meta.kind", "missing": "nope"}},
+		{Source: "output", Match: map[string]any{"type": "result", "num_turns": 1, "ok": true, "meta.kind": map[string]any{"present": true}}, Type: "dev.qory.session.result", Data: map[string]string{"n": "num_turns", "k": "meta.kind", "missing": "nope"}},
 	}}
 	rec := func(js string) descriptor.Record {
 		var m map[string]any
@@ -33,7 +33,7 @@ func TestMatchIsEqualityOrPresenceOnly(t *testing.T) {
 		return descriptor.Record{Source: "output", Record: m}
 	}
 	typ, data, ok := d.Map(rec(`{"type":"result","num_turns":1,"ok":true,"meta":{"kind":"x"}}`))
-	if !ok || typ != "ai.qory.session.result" || data["n"] != 1.0 || data["k"] != "x" {
+	if !ok || typ != "dev.qory.session.result" || data["n"] != 1.0 || data["k"] != "x" {
 		t.Errorf("Map = %s %v %v", typ, data, ok)
 	}
 	if _, hasMissing := data["missing"]; hasMissing {

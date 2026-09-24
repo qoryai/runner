@@ -139,7 +139,7 @@ func TestServerSinkDeliversBatchesTheReceiverStores(t *testing.T) {
 	s := newStation(t, nil)
 	var mu sync.Mutex
 	var answers []server.Digests
-	w := sink.NewServer(client(s), target(s, "ai.qory.run.started", "ai.qory.run.heartbeat"), t.TempDir(), nil, func(d server.Digests) {
+	w := sink.NewServer(client(s), target(s, "dev.qory.run.started", "dev.qory.run.heartbeat"), t.TempDir(), nil, func(d server.Digests) {
 		mu.Lock()
 		answers = append(answers, d)
 		mu.Unlock()
@@ -204,7 +204,7 @@ func TestServerSinkRetriesUntilAcceptedAndSpoolsTheRest(t *testing.T) {
 		t.Fatalf("spooled files %v", files)
 	}
 	b, _ := os.ReadFile(files[0])
-	if !strings.Contains(string(b), `"ai.qory.run.exited"`) || !strings.HasPrefix(string(b), "[") {
+	if !strings.Contains(string(b), `"dev.qory.run.exited"`) || !strings.HasPrefix(string(b), "[") {
 		t.Errorf("spooled batch %s", b)
 	}
 	if len(notes) == 0 || !strings.Contains(notes[len(notes)-1], "1 events were not accepted") {

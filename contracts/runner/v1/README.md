@@ -34,7 +34,8 @@ is `v2`. What each revision added:
 
 Revision 1 was amended in place in 0.5.0, before any server relied on it: the run
 configuration request carries every label of the run, where 0.4 sent `forge` and
-`repository` alone.
+`repository` alone. It was amended in place again in 0.5.1: every event type starts
+`dev.qory.`, where 0.4 and 0.5.0 sent `ai.qory.`.
 
 `v1` is the first generation of this namespace, not a stability promise. The runner
 module is at `v0`, which under Go's rules promises no compatibility, and until it
@@ -84,7 +85,7 @@ Stated so a receiver reads the record for what it is.
   `CONNECT` tunnel is a blind relay once established. The exception is stated in the
   run's record: behind a wall, for a host the run holds a credential for or has path
   rules for, the proxy ends the session's TLS itself and reads each request's method and
-  path. `ai.qory.run.policy_applied` lists those hosts as `terminated`, and no other
+  path. `dev.qory.run.policy_applied` lists those hosts as `terminated`, and no other
   host is read.
 - On a terminated host the session's side of the connection is HTTP/1.1, so a protocol
   that needs HTTP/2 end to end, gRPC say, does not work there, and a program that pins
@@ -149,7 +150,7 @@ One run, on a developer machine, with a server configured:
    `.qory/runs/<id>/` in the checkout.
 3. It validates the server document once, when one is given, and fetches the server's
    configuration document with a signed `GET` (§The server). It posts one
-   `ai.qory.ping` to the events URL the document names and waits for a 2xx. A fetch
+   `dev.qory.ping` to the events URL the document names and waits for a 2xx. A fetch
    that fails, a document the schema refuses, or a ping not accepted means the run does
    not start: a run someone asked to have observed is not run unobserved by accident.
    The `--local` flag of the command runs with the file sink alone and contacts no
@@ -173,20 +174,20 @@ One run, on a developer machine, with a server configured:
    Code that is a copy of the settings file the launch passes, written as
    `settings.json` in the run directory and named in its place. What is prepared goes
    into the run directory; the composed home is not modified.
-7. It emits `ai.qory.run.started` and `ai.qory.run.policy_applied`, then starts the
+7. It emits `dev.qory.run.started` and `dev.qory.run.policy_applied`, then starts the
    program: on a pseudo-terminal when the caller is interactive and no argument the
    descriptor names as headless is among the runtime's, on pipes otherwise.
-8. While the program runs: every chunk of output is one `ai.qory.run.log`; on a
-   pseudo-terminal every resize is one `ai.qory.run.resized`; every connection through
-   the proxy is one `ai.qory.run.egress`; every record the descriptor matches is one
-   session event; every thirty seconds one `ai.qory.run.heartbeat`.
+8. While the program runs: every chunk of output is one `dev.qory.run.log`; on a
+   pseudo-terminal every resize is one `dev.qory.run.resized`; every connection through
+   the proxy is one `dev.qory.run.egress`; every record the descriptor matches is one
+   session event; every thirty seconds one `dev.qory.run.heartbeat`.
 9. The program exits. The runner drains the socket, so a hook on the runtime's last
-   event is still read, emits `ai.qory.run.exited`, gives the sinks fifteen seconds to
+   event is still read, emits `dev.qory.run.exited`, gives the sinks fifteen seconds to
    flush, reports what the server did not accept, and returns the program's exit
    status. A runtime killed by a signal exits as `-1` with the signal named.
 
 A run may have a time limit. When the runtime still runs at the limit the runner stops
-it, and `ai.qory.run.exited` carries `reason: timeout` with the state `failed`; step 9
+it, and `dev.qory.run.exited` carries `reason: timeout` with the state `failed`; step 9
 is otherwise the same. A denied connection
 never ends a run; the limit is the one thing of the runner's that does.
 
@@ -202,9 +203,9 @@ The run id is the runner's own, a UUID version 7, unless the caller already hold
 caller's id is a UUID in the canonical lower-case form, since it is every event's
 `subject` and names the run directory, and anything else is no run. What else the caller
 knows the run by, a key in its queue, a repository, an issue, goes in `labels` on
-`ai.qory.run.started`: at most 16, a key of 1 to 64 of `a-z`, `0-9`, `_`, `.` and `-`, a
+`dev.qory.run.started`: at most 16, a key of 1 to 64 of `a-z`, `0-9`, `_`, `.` and `-`, a
 value of at most 256 bytes. The runner reads nothing into them. It copies them into
-`ai.qory.run.started`, and no other event repeats them: a receiver joins on `subject`.
+`dev.qory.run.started`, and no other event repeats them: a receiver joins on `subject`.
 It sends them, all of them, on the run configuration request (§The server), and the
 server decides which labels name what the run works on. The `qory` command, for one,
 labels a run in a git checkout with `forge` and `repository` from its origin remote, and
@@ -216,7 +217,7 @@ After step 6 it hands the wall the launch, the proxy's address, the socket and t
 run directory, read-only, and starts the command the wall returns, on the same pseudo-terminal or
 pipes; the proxy and socket variables inside name the addresses the enclosure reaches
 them on. After step 9 it closes the wall, which removes everything it created.
-`ai.qory.run.started` carries `wall` and `image`.
+`dev.qory.run.started` carries `wall` and `image`.
 
 Under a node runner, step 1 is the node runner handing the same spec down through the
 environment, with the run id it already holds; everything after is one code path.
@@ -251,7 +252,7 @@ egress:
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say. A policy defines none (§Credentials) |
 
 **The harness's declared hosts.** The harness compose reports the hosts its modules
-declared, the command hands that list to the runner, and `ai.qory.run.policy_applied`
+declared, the command hands that list to the runner, and `dev.qory.run.policy_applied`
 reports it as `harness_hosts`; it decides nothing. The policy alone decides: `allow` is
 the policy's list, a declared host the policy does not cover is denied under `enforce`
 like any other, and one `deny` names is denied in either mode. The grammar of a declared
@@ -362,8 +363,8 @@ trust (§The wall). The proxy verifies the real host against the machine's own r
 Every other host stays a tunnel the proxy does not read, and a run with no credential
 and no path rule has no authority at all.
 
-**The record.** `ai.qory.run.policy_applied` carries each use, `name`, `hosts`, `scheme`
-and `paths`, and the `terminated` hosts. On a terminated host `ai.qory.run.egress` is one
+**The record.** `dev.qory.run.policy_applied` carries each use, `name`, `hosts`, `scheme`
+and `paths`, and the `terminated` hosts. On a terminated host `dev.qory.run.egress` is one
 event per request, `method: HTTPS` with `request_method`, `path` without its query,
 `path_rule`, and `credential`, the name of the one the proxy set. No event, no report
 and no error carries a token.
@@ -373,7 +374,9 @@ and no error carries a token.
 Every event is a [CloudEvents 1.0](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md)
 event in the [JSON format](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/formats/json-format.md).
 `event.schema.json` is the envelope: the published CloudEvents schema, vendored as
-`cloudevents.schema.json`, plus what this contract fixes.
+`cloudevents.schema.json`, plus what this contract fixes. Every type starts `dev.qory.`,
+the reverse-DNS name of qory.dev, the domain that roots every identifier of the
+contract, as it roots the schema URLs.
 
 | Attribute | Value |
 |---|---|
@@ -384,7 +387,7 @@ event in the [JSON format](https://github.com/cloudevents/spec/blob/v1.0.2/cloud
 | `type` | one of the types below, and nothing else. A breaking change to a type's data is a new type |
 | `time` | the runner's clock, RFC 3339, UTC |
 | `sequence` | the [sequence extension](https://github.com/cloudevents/spec/blob/main/cloudevents/extensions/sequence.md): the runner-assigned order of the event within the run, a decimal zero-padded to ten digits, from `0000000001`, contiguous. A receiver orders by it, never by arrival |
-| `dataschema` | `https://qory.dev/contracts/runner/v1/events/<type without ai.qory.>.schema.json`, the schema of `data` |
+| `dataschema` | `https://qory.dev/contracts/runner/v1/events/<type without dev.qory.>.schema.json`, the schema of `data` |
 | `datacontenttype` | absent, which the JSON format reads as `application/json` |
 | `data` | a JSON object validating against `dataschema` |
 
@@ -392,36 +395,36 @@ The types, one namespace. The runner's own:
 
 | Type | When | Data |
 |---|---|---|
-| `ai.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version` |
-| `ai.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
-| `ai.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration took effect | `mode`, `allow`, `deny`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `terminated` |
-| `ai.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
-| `ai.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size took effect; never on pipes | `cols`, `rows` |
-| `ai.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_method`, `path`, `path_rule`, `credential` |
-| `ai.qory.run.heartbeat` | every `interval_seconds` while the runtime runs | `elapsed_seconds`, `interval_seconds` |
-| `ai.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
+| `dev.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version` |
+| `dev.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
+| `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration took effect | `mode`, `allow`, `deny`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `terminated` |
+| `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
+| `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size took effect; never on pipes | `cols`, `rows` |
+| `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_method`, `path`, `path_rule`, `credential` |
+| `dev.qory.run.heartbeat` | every `interval_seconds` while the runtime runs | `elapsed_seconds`, `interval_seconds` |
+| `dev.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
 
 The session's, produced by a descriptor from what the runtime reports:
 
 | Type | When | Data |
 |---|---|---|
-| `ai.qory.session.started` | the runtime opened its session | `session_id`, `source`, `model`, `cwd` |
-| `ai.qory.session.prompt_submitted` | a prompt reached the runtime | `session_id`, `prompt` |
-| `ai.qory.session.tool_started` | the runtime is about to run a tool | `session_id`, `tool`, `tool_use_id`, `input` |
-| `ai.qory.session.tool_finished` | a tool ran and returned | the same, `response`, `duration_ms` |
-| `ai.qory.session.tool_failed` | a tool ran and failed | the same, `error`, `interrupted`, `duration_ms` |
-| `ai.qory.session.turn_finished` | the runtime finished responding | `session_id`, `message`, `background_tasks` |
-| `ai.qory.session.turn_failed` | a turn ended on an API error | `session_id`, `error`, `details`, `message` |
-| `ai.qory.session.subagent_started` | a subagent was spawned | `session_id`, `agent_id`, `agent_type` |
-| `ai.qory.session.subagent_finished` | a subagent finished | the same, `message`, `background_tasks` |
-| `ai.qory.session.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
-| `ai.qory.session.ended` | the runtime closed its session | `session_id`, `reason` |
-| `ai.qory.session.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
+| `dev.qory.session.started` | the runtime opened its session | `session_id`, `source`, `model`, `cwd` |
+| `dev.qory.session.prompt_submitted` | a prompt reached the runtime | `session_id`, `prompt` |
+| `dev.qory.session.tool_started` | the runtime is about to run a tool | `session_id`, `tool`, `tool_use_id`, `input` |
+| `dev.qory.session.tool_finished` | a tool ran and returned | the same, `response`, `duration_ms` |
+| `dev.qory.session.tool_failed` | a tool ran and failed | the same, `error`, `interrupted`, `duration_ms` |
+| `dev.qory.session.turn_finished` | the runtime finished responding | `session_id`, `message`, `background_tasks` |
+| `dev.qory.session.turn_failed` | a turn ended on an API error | `session_id`, `error`, `details`, `message` |
+| `dev.qory.session.subagent_started` | a subagent was spawned | `session_id`, `agent_id`, `agent_type` |
+| `dev.qory.session.subagent_finished` | a subagent finished | the same, `message`, `background_tasks` |
+| `dev.qory.session.notification` | the runtime notified its user: waiting for a permission, idle | `session_id`, `kind`, `message`, `title` |
+| `dev.qory.session.ended` | the runtime closed its session | `session_id`, `reason` |
+| `dev.qory.session.result` | a non-interactive session printed its result | `session_id`, `outcome`, `is_error`, `turns`, `duration_ms`, `cost_usd`, `result` |
 
 **Work in the background.** A runtime that starts a command or a subagent in the
 background says so where it says everything else: the start is a tool call, recorded as
-`ai.qory.session.tool_started` with the runtime's own `input`, `run_in_background` in
-Claude Code's, and as `ai.qory.session.tool_finished` with whatever the tool answered; a
+`dev.qory.session.tool_started` with the runtime's own `input`, `run_in_background` in
+Claude Code's, and as `dev.qory.session.tool_finished` with whatever the tool answered; a
 subagent's start and end are the subagent events, with its `agent_id` and `agent_type`.
 After that the runtime reports a list, not an event: what is still running, each entry
 with the runtime's `id`, `type`, `status` and `description`, and a shell's `command` or a
@@ -438,18 +441,18 @@ and the run's stop signal and grace are what the runtime has to close such work 
 runner stops it.
 
 Every session event that comes from a hook may carry `agent_id` and `agent_type` when
-it happened inside a subagent; `ai.qory.session.result`, read from the runtime's output,
+it happened inside a subagent; `dev.qory.session.result`, read from the runtime's output,
 carries neither. The schema of each type, under `events/`, says which fields are required and
 what each holds. Values are copied from the runtime unchanged: `input` and `response`
 have the shape the tool gave them, `error` is display text, and the enumerations in
 `source`, `reason`, `kind`, `outcome` are the runtime's words.
 
-`ai.qory.run.policy_applied` says where the policy came from: `source` is `none`,
+`dev.qory.run.policy_applied` says where the policy came from: `source` is `none`,
 `config` or `fetched`; `url` is where a fetched one was fetched from; `digest` is the
 runner's own hex sha256 of the policy document's canonical JSON, with `config` and
 `fetched`; `run_configuration` is the server's digest of the run configuration document
 as its header carried it, with `fetched`; `allow` and `deny` are the policy's two lists
-as written, `deny` the hosts denied by name in either mode. `ai.qory.run.egress` says
+as written, `deny` the hosts denied by name in either mode. `dev.qory.run.egress` says
 what became of the connection in `outcome`: `connected`, the dial succeeded;
 `dial_failed`, allowed and the dial failed; `refused`, not dialled, because the policy
 or the wall's guard denied it, or closed by a reload.
@@ -469,9 +472,9 @@ when the runtime exits is the last chunk.
 
 A replay lays the redraws of a full-screen program over each other, which takes the
 terminal's size, so the size is in the record. On a pseudo-terminal
-`ai.qory.run.started` carries `terminal`, the columns and rows the runtime started on:
+`dev.qory.run.started` carries `terminal`, the columns and rows the runtime started on:
 the runner's own terminal's when it has one, 80 by 24 otherwise. Each later change is
-one `ai.qory.run.resized` with the new size, at the sequence where it took effect: what
+one `dev.qory.run.resized` with the new size, at the sequence where it took effect: what
 the gap still held is cut before it, so the chunks before it were written to a terminal
 of the old size and the chunks after it to one of the new. On pipes there is no
 `terminal` and no resize.
@@ -483,7 +486,7 @@ of the old size and the chunks after it to one of the new. On pipes there is no
 - `events.jsonl`: every event of the run, one per line, in sequence order, the ping
   included when one was sent. The record of truth; the server's is a copy.
 - `output.log`: the raw bytes of the session's output, the concatenation of the
-  `ai.qory.run.log` chunks. Both files tail.
+  `dev.qory.run.log` chunks. Both files tail.
 - `settings.json`: the runtime's settings with the runner's hooks added, when hooks
   were installed.
 - `undelivered/`: the batches the server did not accept, when there were any.
@@ -643,10 +646,10 @@ it runs, and the whole of it: nothing in an answer's body is read.
 **Reload**, when a fetched run configuration replaces the one in force, three rules:
 
 1. The new policy takes effect for new connections at once, and the record gets a
-   second `ai.qory.run.policy_applied`, with the new digests, at the sequence where it
+   second `dev.qory.run.policy_applied`, with the new digests, at the sequence where it
    took effect.
 2. A tunnel open to a host the new policy denies is closed by the proxy and recorded as
-   a denied `ai.qory.run.egress` with `outcome: refused` and the rule that denied it.
+   a denied `dev.qory.run.egress` with `outcome: refused` and the rule that denied it.
 3. A host the new policy terminates TLS for is terminated on its next connection.
 
 What is still undelivered when the run ends is spooled to `.qory/runs/<id>/undelivered/`
@@ -662,15 +665,16 @@ sequence of every event in it, and the one word `stopped` for a 410. `lock` is h
 the runner for as long as it lives, by the kernel, so it is free once the runner is gone
 however it went. Sending a run again is the job's last step, whatever happened before
 it: refused while the lock is held; then what the run's wall left behind is removed, by
-the run's label; a record with no `ai.qory.run.exited` gets one, numbered on from the
+the run's label; a record with no `dev.qory.run.exited` gets one, numbered on from the
 last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`; and every
 event the server's filter wants that no accepted batch named is posted, in order, in
-batches cut the same way, until accepted or given up on. The resend fetches the
-configuration document first, as a run does, and posts where it says. What is still
-not accepted is under `undelivered/` again. A receiver sees some events twice when the
-runner died between an answer and its line, and discards them by `id` as ever. Nothing
-of this recovers a machine that died: the record went with it, and a receiver learns of
-that from heartbeats that stop.
+batches cut the same way, until accepted or given up on. The record of a runner
+before 0.5.1 is sent with each type under `dev.qory.`, and the file keeps what was
+written. The resend fetches the configuration document first, as a run does, and posts
+where it says. What is still not accepted is under `undelivered/` again. A receiver
+sees some events twice when the runner died between an answer and its line, and
+discards them by `id` as ever. Nothing of this recovers a machine that died: the record
+went with it, and a receiver learns of that from heartbeats that stop.
 
 **The modes of a run:**
 
@@ -703,7 +707,7 @@ The runner starts a program, records it and stops it, and knows no program. What
 particular to one is behind an interface, `runtimes.Runtime` in the Go module, as an
 enclosure is behind `wall.Wall`, and Claude Code is one implementation of it among the
 ones there may be. A runtime answers six things: its name and the version of the
-program it was written against, reported in `ai.qory.run.started`; how a launch is
+program it was written against, reported in `dev.qory.run.started`; how a launch is
 prepared so the program reports to the runner, which may change the arguments, add
 variables and write into the run directory and nothing else; whether the program's
 standard output is records to read; what event, if any, one record is; how the
@@ -849,7 +853,7 @@ reached by default. Two rules, in either mode, observe included:
   an alias of it, not by `localhost`, which `NO_PROXY` keeps inside the enclosure.
 
 A refusal the proxy can make without resolving, a literal address or `localhost`, is a
-`denied` `ai.qory.run.egress` with the rule `wall:own-address` and a `403`; a name that
+`denied` `dev.qory.run.egress` with the rule `wall:own-address` and a `403`; a name that
 resolves to such an address passes the decision, is refused when dialled, and the
 runtime gets a `502`. Without the guard the way around a wall is through the proxy.
 

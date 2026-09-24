@@ -4,6 +4,34 @@ Every release of the runner, newest first, in the shape of [Keep a Changelog](ht
 The version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html); before 1.0 a minor
 release may change what an existing document does, and says so under Upgrading.
 
+## [0.5.1] - 2026-09-24
+
+### Upgrading
+
+- A receiver that matched on `ai.qory.*` matches `dev.qory.*`: every event type is
+  renamed, `ai.qory.run.started` to `dev.qory.run.started` and so on, and its data is
+  as it was. A server's configuration document names the types it wants in
+  `events.types` under the new names, and a descriptor of your own names its session
+  types `dev.qory.session.*`; the schemas refuse the old names.
+- The contract stays `v1` revision 1, amended in place, and the runner sends
+  `X-Qory-Contract-Version: 1` as before. Nothing else changes.
+
+### Changed
+
+- Contract `v1` revision 1 is amended in place again, before any server relied on it:
+  every event type starts `dev.qory.`, where it started `ai.qory.`. A CloudEvents type
+  is named under the reverse-DNS name of whoever defines it, and qory.dev roots every
+  identifier of the contract, as it roots the schema URLs,
+  `https://qory.dev/contracts/runner/v1/...`. The schemas, the fixtures and the Claude
+  Code descriptor carry the new names, and the signed batch fixtures are signed again
+  over their new bodies.
+- The containers and the networks of a wall carry the label `dev.qory.run`, where they
+  carried `ai.qory.run`.
+- Sending again the record of a runner before 0.5.1 reads its `ai.qory.` types as
+  `dev.qory.` ones: its `run.exited` is found, so the record is not closed twice, and
+  the server gets each event under the type of today. The file keeps what was written.
+  The reap that goes with it removes what carries either label.
+
 ## [0.5.0] - 2026-09-24
 
 ### Upgrading
@@ -400,7 +428,8 @@ release may change what an existing document does, and says so under Upgrading.
   It names the policy's `egress.allow` grammar as the one definition of a declared host,
   which the harness contract copies.
 
-[Unreleased]: https://github.com/qoryai/runner/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/qoryai/runner/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/qoryai/runner/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/qoryai/runner/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/qoryai/runner/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/qoryai/runner/compare/v0.3.0...v0.4.0

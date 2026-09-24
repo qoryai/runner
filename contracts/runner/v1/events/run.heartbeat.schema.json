@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/run.heartbeat.schema.json",
-  "title": "ai.qory.run.heartbeat",
+  "title": "dev.qory.run.heartbeat",
   "description": "The run is alive. Sent every interval_seconds while the runtime runs; a receiver that misses two in a row may consider the run lost.",
   "type": "object",
   "additionalProperties": false,

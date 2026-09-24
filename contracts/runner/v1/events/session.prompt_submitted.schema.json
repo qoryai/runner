@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/session.prompt_submitted.schema.json",
-  "title": "ai.qory.session.prompt_submitted",
+  "title": "dev.qory.session.prompt_submitted",
   "description": "A prompt reached the runtime, before it acted on it.",
   "type": "object",
   "additionalProperties": false,

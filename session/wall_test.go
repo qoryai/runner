@@ -70,7 +70,7 @@ func TestWallWrapsTheLaunch(t *testing.T) {
 	if d := data(evs[0]); d["wall"] != "open" || d["image"] != "example.com/agent:1" {
 		t.Errorf("run.started %v", d)
 	}
-	if len(ofType(evs, "ai.qory.session.ended")) != 1 {
+	if len(ofType(evs, "dev.qory.session.ended")) != 1 {
 		t.Errorf("the hook did not cross: %v", types(evs))
 	}
 
@@ -147,7 +147,7 @@ func TestCredentialsCrossAsAnAuthorityAndAPlaceholder(t *testing.T) {
 	if strings.Contains(strings.Join(w.got.Env, " ")+string(record), "the-token-held-outside") {
 		t.Error("the token crossed the wall or reached the record")
 	}
-	applied := data(ofType(events(t, res), "ai.qory.run.policy_applied")[0])
+	applied := data(ofType(events(t, res), "dev.qory.run.policy_applied")[0])
 	creds, _ := applied["credentials"].([]any)
 	terminated, _ := applied["terminated"].([]any)
 	if len(creds) != 1 || creds[0].(map[string]any)["scheme"] != "bearer" || len(terminated) != 2 || applied["paths"] == nil {
@@ -195,7 +195,7 @@ func TestAReloadBehindAWallBringsCredentialsAndPaths(t *testing.T) {
 	waitFor(t, func() bool { return w.reported("the policy in force stays") })
 
 	evs := w.finish()
-	pa := ofType(evs, "ai.qory.run.policy_applied")
+	pa := ofType(evs, "dev.qory.run.policy_applied")
 	if len(pa) != 2 {
 		t.Fatalf("policy_applied events: %v", pa)
 	}

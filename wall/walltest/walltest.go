@@ -192,7 +192,7 @@ func Run(t *testing.T, o Options) {
 	check("the proxy is reached and decides", p.Allowed == 200 && p.Denied == 403, fmt.Sprintf("allowed answered %d (%s), denied answered %d (%s)", p.Allowed, p.AllowedErr, p.Denied, p.DeniedErr))
 	var egress []string
 	for _, e := range r.events {
-		if e["type"] == "ai.qory.run.egress" {
+		if e["type"] == "dev.qory.run.egress" {
 			d := e["data"].(map[string]any)
 			egress = append(egress, fmt.Sprint(d["host"], " ", d["decision"], " ", d["rule"]))
 		}
@@ -204,7 +204,7 @@ func Run(t *testing.T, o Options) {
 		fmt.Sprintf("outside the paths answered %d (%s), inside them %d (%s), want the proxy's 403 and, with nothing upstream, its 502; the bundle is %q with %d certificates", p.TLSDenied, p.TLSDeniedErr, p.TLSAllowed, p.TLSAllowedErr, p.Bundle, p.BundleCerts))
 	set := ""
 	for _, e := range r.events {
-		if d, _ := e["data"].(map[string]any); e["type"] == "ai.qory.run.egress" && d["path"] == credentialPath {
+		if d, _ := e["data"].(map[string]any); e["type"] == "dev.qory.run.egress" && d["path"] == credentialPath {
 			set, _ = d["credential"].(string)
 		}
 	}
@@ -234,7 +234,7 @@ func Run(t *testing.T, o Options) {
 			t.Skip("the adapter carries no hook socket across on this machine; the forwarder's network transport is not in this release")
 		}
 		for _, e := range r.events {
-			if e["type"] == "ai.qory.session.ended" {
+			if e["type"] == "dev.qory.session.ended" {
 				return
 			}
 		}
@@ -242,7 +242,7 @@ func Run(t *testing.T, o Options) {
 	})
 	check("the exit status is the runtime's", r.res.ExitCode == 7, r.res.ExitCode)
 	for _, e := range r.events {
-		if e["type"] == "ai.qory.run.started" {
+		if e["type"] == "dev.qory.run.started" {
 			d := e["data"].(map[string]any)
 			check("the record names the wall", d["wall"] == o.Wall.Name() && d["image"] == o.Image, d)
 		}

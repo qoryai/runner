@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/session.notification.schema.json",
-  "title": "ai.qory.session.notification",
+  "title": "dev.qory.session.notification",
   "description": "The runtime notified its user: it waits for a permission, it is idle, it needs input.",
   "type": "object",
   "additionalProperties": false,

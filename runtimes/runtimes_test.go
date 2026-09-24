@@ -20,7 +20,7 @@ stop: {signal: SIGINT, grace: 45s}
 rules:
   - source: output
     match: {kind: done}
-    type: ai.qory.session.result
+    type: dev.qory.session.result
     data: {result: text}
 `
 
@@ -37,7 +37,7 @@ func TestARuntimeWrittenAsDataAlone(t *testing.T) {
 		t.Errorf("stop %+v", s)
 	}
 	typ, data, ok := rt.Map(runtimes.Record{Source: runtimes.SourceOutput, Record: map[string]any{"kind": "done", "text": "ok"}})
-	if !ok || typ != "ai.qory.session.result" || data["result"] != "ok" {
+	if !ok || typ != "dev.qory.session.result" || data["result"] != "ok" {
 		t.Errorf("%v %s %v", ok, typ, data)
 	}
 	// With a forwarder and no hooks source there is still nothing to install.

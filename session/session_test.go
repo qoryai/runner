@@ -45,6 +45,8 @@ const (
 type control struct {
 	srv   *httptest.Server
 	store *receiver.File
+	// received is the store's file.
+	received string
 	// refuse, when set, is the status every request gets instead of an answer.
 	refuse atomic.Int32
 	// hits counts every request; discoveries the discovery fetches; fetches the run
@@ -78,11 +80,12 @@ func (a answering) WriteHeader(code int) {
 
 func newControl(t *testing.T) *control {
 	t.Helper()
-	store, err := receiver.OpenFile(filepath.Join(t.TempDir(), "received.jsonl"))
+	received := filepath.Join(t.TempDir(), "received.jsonl")
+	store, err := receiver.OpenFile(received)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &control{store: store}
+	c := &control{store: store, received: received}
 	h := &receiver.Handler{
 		Keys:  func(k string) ([]string, bool) { return []string{testSecret}, k == testKey },
 		Store: store,
@@ -328,31 +331,31 @@ func TestRunEnforcesRecordsAndExitsWithTheRuntimesStatus(t *testing.T) {
 		t.Errorf("result %+v", res)
 	}
 	evs := events(t, res)
-	if len(evs) < 8 || evs[0]["type"] != "ai.qory.run.started" || evs[1]["type"] != "ai.qory.run.policy_applied" || evs[len(evs)-1]["type"] != "ai.qory.run.exited" {
+	if len(evs) < 8 || evs[0]["type"] != "dev.qory.run.started" || evs[1]["type"] != "dev.qory.run.policy_applied" || evs[len(evs)-1]["type"] != "dev.qory.run.exited" {
 		t.Fatalf("event order: %v", types(evs))
 	}
 	applied := data(evs[1])
 	if applied["mode"] != "enforce" || applied["source"] != "config" || fmt.Sprint(applied["allow"]) != "[127.0.0.1 api.anthropic.com]" || fmt.Sprint(applied["harness_hosts"]) != "[127.0.0.1 registry.npmjs.org]" || fmt.Sprint(applied["deny"]) != "[tracker.example]" || applied["digest"] == nil || applied["declared"] != nil || applied["url"] != nil {
 		t.Errorf("policy_applied %v", applied)
 	}
-	egress := ofType(evs, "ai.qory.run.egress")
+	egress := ofType(evs, "dev.qory.run.egress")
 	if len(egress) != 2 || data(egress[0])["decision"] != "allowed" || data(egress[0])["rule"] != "127.0.0.1" || data(egress[0])["outcome"] != "connected" || data(egress[1])["decision"] != "denied" || data(egress[1])["host"] != "localhost" || data(egress[1])["outcome"] != "refused" {
 		t.Errorf("egress %v", egress)
 	}
 	streams := map[string]bool{}
-	for _, l := range ofType(evs, "ai.qory.run.log") {
+	for _, l := range ofType(evs, "dev.qory.run.log") {
 		streams[data(l)["stream"].(string)] = true
 	}
 	if !streams["stdout"] || !streams["stderr"] {
 		t.Errorf("log streams %v", streams)
 	}
-	if r := ofType(evs, "ai.qory.session.result"); len(r) != 1 || data(r[0])["outcome"] != "success" || data(r[0])["result"] != "done" {
+	if r := ofType(evs, "dev.qory.session.result"); len(r) != 1 || data(r[0])["outcome"] != "success" || data(r[0])["result"] != "done" {
 		t.Errorf("session.result %v", r)
 	}
-	if e := ofType(evs, "ai.qory.session.ended"); len(e) != 1 || data(e[0])["reason"] != "other" {
+	if e := ofType(evs, "dev.qory.session.ended"); len(e) != 1 || data(e[0])["reason"] != "other" {
 		t.Errorf("session.ended %v", e)
 	}
-	if len(ofType(evs, "ai.qory.run.heartbeat")) == 0 {
+	if len(ofType(evs, "dev.qory.run.heartbeat")) == 0 {
 		t.Error("no heartbeat")
 	}
 	exited := data(evs[len(evs)-1])
@@ -405,10 +408,10 @@ func TestNoPolicyObservesAndNoServerNeedsNoPing(t *testing.T) {
 	if a := data(evs[1]); a["mode"] != "observe" || a["source"] != "none" || a["digest"] != nil {
 		t.Errorf("policy_applied %v", a)
 	}
-	if e := ofType(evs, "ai.qory.run.egress"); len(e) != 1 || data(e[0])["decision"] != "allowed" || data(e[0])["rule"] != "" || data(e[0])["outcome"] != "connected" {
+	if e := ofType(evs, "dev.qory.run.egress"); len(e) != 1 || data(e[0])["decision"] != "allowed" || data(e[0])["rule"] != "" || data(e[0])["outcome"] != "connected" {
 		t.Errorf("egress %v", e)
 	}
-	if len(ofType(evs, "ai.qory.ping")) != 0 || res.ExitCode != 0 || res.State != "succeeded" {
+	if len(ofType(evs, "dev.qory.ping")) != 0 || res.ExitCode != 0 || res.State != "succeeded" {
 		t.Errorf("result %+v", res)
 	}
 	if _, err := os.Stat(filepath.Join(res.Dir, "settings.json")); !os.IsNotExist(err) {
@@ -447,13 +450,13 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	evs := events(t, res)
-	if evs[0]["type"] != "ai.qory.ping" || fmt.Sprint(data(evs[0])["events"]) != "[*]" || data(evs[0])["contract_version"] != 1.0 {
+	if evs[0]["type"] != "dev.qory.ping" || fmt.Sprint(data(evs[0])["events"]) != "[*]" || data(evs[0])["contract_version"] != 1.0 {
 		t.Errorf("first event %v", evs[0])
 	}
 	if c.store.Count() != len(evs) || res.Undelivered != 0 || c.discoveries.Load() != 1 {
 		t.Errorf("store holds %d of %d events, %d undelivered, %d discoveries", c.store.Count(), len(evs), res.Undelivered, c.discoveries.Load())
 	}
-	if a := data(evs[2]); evs[2]["type"] != "ai.qory.run.policy_applied" || a["source"] != "none" || a["url"] != nil {
+	if a := data(evs[2]); evs[2]["type"] != "dev.qory.run.policy_applied" || a["source"] != "none" || a["url"] != nil {
 		t.Errorf("a server with no run section: policy_applied %v", a)
 	}
 	// Everything was accepted during the run, the ping too, so nothing is owed after it.
@@ -515,7 +518,7 @@ func TestServerIsDiscoveredPingedAndDelivered(t *testing.T) {
 	sp.Forwarder = nil
 	sp.Server = cfg
 	sp.Local = true
-	if res, err := session.Run(context.Background(), sp); err != nil || len(ofType(events(t, res), "ai.qory.ping")) != 0 || c.hits.Load() != before {
+	if res, err := session.Run(context.Background(), sp); err != nil || len(ofType(events(t, res), "dev.qory.ping")) != 0 || c.hits.Load() != before {
 		t.Errorf("local run: %v, the server was contacted %d times", err, c.hits.Load()-before)
 	}
 }
@@ -549,7 +552,7 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	}()
 	applied := func() int {
 		b, _ := os.ReadFile(filepath.Join(runDir, "events.jsonl"))
-		return strings.Count(string(b), `"ai.qory.run.policy_applied"`)
+		return strings.Count(string(b), `"dev.qory.run.policy_applied"`)
 	}
 	waitFor(t, func() bool { return applied() == 1 })
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":[]}}`, second)
@@ -562,7 +565,7 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 		t.Fatal(runErr)
 	}
 	evs := events(t, res)
-	pa := ofType(evs, "ai.qory.run.policy_applied")
+	pa := ofType(evs, "dev.qory.run.policy_applied")
 	if len(pa) != 2 {
 		t.Fatalf("policy_applied events: %v", pa)
 	}
@@ -573,7 +576,7 @@ func TestRunConfigurationIsThePolicyAndReloadsOnTheDigest(t *testing.T) {
 	if then["source"] != "fetched" || fmt.Sprint(then["allow"]) != "[]" || then["run_configuration"] != second || then["digest"] == at["digest"] {
 		t.Errorf("the second policy_applied %v", then)
 	}
-	egress := ofType(evs, "ai.qory.run.egress")
+	egress := ofType(evs, "dev.qory.run.egress")
 	if len(egress) != 1 || data(egress[0])["decision"] != "denied" || data(egress[0])["outcome"] != "refused" || data(egress[0])["mode"] != "enforce" {
 		t.Errorf("egress after the reload %v", egress)
 	}
@@ -636,7 +639,7 @@ func startWaiting(t *testing.T, sp session.Spec) *waiting {
 // applied is how many policy_applied events the record holds so far.
 func (w *waiting) applied() int {
 	b, _ := os.ReadFile(filepath.Join(w.dir, "events.jsonl"))
-	return strings.Count(string(b), `"ai.qory.run.policy_applied"`)
+	return strings.Count(string(b), `"dev.qory.run.policy_applied"`)
 }
 
 // reported says whether a report line holding the text was made.
@@ -703,7 +706,7 @@ func TestAReloadIsAsStrictAsAStart(t *testing.T) {
 		t.Errorf("the document in force under another answered digest: %d fetches, %d policy_applied", n-fetched, w.applied())
 	}
 	evs := w.finish()
-	pa := ofType(evs, "ai.qory.run.policy_applied")
+	pa := ofType(evs, "dev.qory.run.policy_applied")
 	if len(pa) != 2 {
 		t.Fatalf("policy_applied events: %v", pa)
 	}
@@ -711,7 +714,7 @@ func TestAReloadIsAsStrictAsAStart(t *testing.T) {
 	if fmt.Sprint(then["allow"]) != "[api.example]" || then["paths"] != nil || then["run_configuration"] != digest('2') || then["credentials"] != nil {
 		t.Errorf("the second policy_applied %v", then)
 	}
-	egress := ofType(evs, "ai.qory.run.egress")
+	egress := ofType(evs, "dev.qory.run.egress")
 	if len(egress) != 1 || data(egress[0])["decision"] != "denied" || data(egress[0])["host"] != "127.0.0.1" || data(egress[0])["outcome"] != "refused" {
 		t.Errorf("egress to a host whose paths cannot be held %v", egress)
 	}
@@ -750,7 +753,7 @@ func TestInteractiveRunsOnAPseudoTerminal(t *testing.T) {
 	if string(out) != "hello\r\n" {
 		t.Errorf("output.log %q", out)
 	}
-	if l := ofType(events(t, res), "ai.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
+	if l := ofType(events(t, res), "dev.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
 		t.Errorf("log %v", l)
 	}
 	if size := data(events(t, res)[0])["terminal"]; fmt.Sprint(size) != "map[cols:80 rows:24]" {
@@ -777,10 +780,10 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 		if started["interactive"] != false || started["terminal"] != nil {
 			t.Errorf("run.started %v; want not interactive and no terminal size", started)
 		}
-		if l := ofType(evs, "ai.qory.run.log"); len(l) == 0 || data(l[0])["stream"] == "terminal" {
+		if l := ofType(evs, "dev.qory.run.log"); len(l) == 0 || data(l[0])["stream"] == "terminal" {
 			t.Errorf("log %v; want the streams of pipes", l)
 		}
-		if r := ofType(evs, "ai.qory.session.result"); len(r) != 1 || data(r[0])["result"] != "done" {
+		if r := ofType(evs, "dev.qory.session.result"); len(r) != 1 || data(r[0])["result"] != "done" {
 			t.Errorf("session.result %v; want the output read", r)
 		}
 	})
@@ -799,7 +802,7 @@ func TestAHeadlessArgumentRunsOnPipesWhateverTheCallerHas(t *testing.T) {
 		if started := data(evs[0]); started["interactive"] != true || started["terminal"] == nil {
 			t.Errorf("run.started %v; want the caller's terminal kept", started)
 		}
-		if l := ofType(evs, "ai.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
+		if l := ofType(evs, "dev.qory.run.log"); len(l) != 1 || data(l[0])["stream"] != "terminal" {
 			t.Errorf("log %v", l)
 		}
 	})
@@ -843,7 +846,7 @@ func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
 	if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return strings.Contains(stream.String(), `"ai.qory.run.resized"`) })
+	waitFor(t, func() bool { return strings.Contains(stream.String(), `"dev.qory.run.resized"`) })
 	if _, err := io.WriteString(master, "go\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -855,7 +858,7 @@ func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
 	if size := data(evs[0])["terminal"]; fmt.Sprint(size) != "map[cols:100 rows:40]" {
 		t.Errorf("run.started terminal %v", size)
 	}
-	resized := ofType(evs, "ai.qory.run.resized")
+	resized := ofType(evs, "dev.qory.run.resized")
 	if len(resized) != 1 || fmt.Sprint(data(resized[0])) != "map[cols:120 rows:50]" {
 		t.Fatalf("run.resized %v", resized)
 	}
@@ -864,9 +867,9 @@ func TestInteractiveRunFollowsTheTerminalSize(t *testing.T) {
 	var before, after []byte
 	seen := false
 	for _, e := range evs {
-		if e["type"] == "ai.qory.run.resized" {
+		if e["type"] == "dev.qory.run.resized" {
 			seen = true
-		} else if e["type"] == "ai.qory.run.log" {
+		} else if e["type"] == "dev.qory.run.log" {
 			b, _ := base64.StdEncoding.DecodeString(data(e)["bytes"].(string))
 			if seen {
 				after = append(after, b...)
@@ -932,7 +935,7 @@ func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
 	if !res.TimedOut || res.Signal != "SIGTERM" || res.State != "failed" {
 		t.Errorf("result %+v", res)
 	}
-	exited := ofType(events(t, res), "ai.qory.run.exited")
+	exited := ofType(events(t, res), "dev.qory.run.exited")
 	if len(exited) != 1 || data(exited[0])["reason"] != "timeout" {
 		t.Errorf("run.exited %v", exited)
 	}
@@ -942,7 +945,7 @@ func TestTimeoutStopsTheRuntimeAndIsTheReason(t *testing.T) {
 	if res, err = runWithSettingsEnv(t, sp); err != nil {
 		t.Fatal(err)
 	}
-	if exited := ofType(events(t, res), "ai.qory.run.exited"); res.TimedOut || data(exited[0])["reason"] != nil {
+	if exited := ofType(events(t, res), "dev.qory.run.exited"); res.TimedOut || data(exited[0])["reason"] != nil {
 		t.Errorf("a run within its limit timed out: %+v %v", res, exited)
 	}
 }
@@ -959,7 +962,7 @@ func TestRunIDAndLabelsAreTheCallers(t *testing.T) {
 	if res.RunID != id || filepath.Base(res.Dir) != id {
 		t.Errorf("result %+v", res)
 	}
-	started := ofType(events(t, res), "ai.qory.run.started")
+	started := ofType(events(t, res), "dev.qory.run.started")
 	if labels, _ := data(started[0])["labels"].(map[string]any); len(labels) != 3 || labels["run_key"] != "queue/1234" {
 		t.Errorf("run.started %v", started)
 	}
@@ -1106,11 +1109,40 @@ func TestResendCompletesAndDeliversTheRecordOfARunThatIsOver(t *testing.T) {
 	}
 	evs := events(t, res)
 	last := evs[len(evs)-1]
-	if !sent.Closed || last["type"] != "ai.qory.run.exited" || data(last)["reason"] != "runner_lost" || data(last)["state"] != "failed" {
+	if !sent.Closed || last["type"] != "dev.qory.run.exited" || data(last)["reason"] != "runner_lost" || data(last)["state"] != "failed" {
 		t.Errorf("the record was not closed: %+v, last event %v", sent, last)
 	}
 	if len(evs) != len(lines) || store.Count()-before != len(evs) {
 		t.Errorf("%d events in the file, want %d; the store got %d", len(evs), len(lines), store.Count()-before)
+	}
+
+	// The record of a runner before 0.5.1, whose types start ai.qory.: its run.exited
+	// is found, and the server gets every event under the types of today.
+	sp = spec(t, nil)
+	sp.Local = true
+	if res, err = runWithSettingsEnv(t, sp); err != nil {
+		t.Fatal(err)
+	}
+	file = filepath.Join(res.Dir, "events.jsonl")
+	b, _ = os.ReadFile(file)
+	old := strings.ReplaceAll(string(b), `"type":"dev.qory.`, `"type":"ai.qory.`)
+	if err := os.WriteFile(file, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before = store.Count()
+	sent, err = session.Resend(ctx, session.ResendSpec{Dir: res.Dir, Server: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := strings.Count(old, "\n")
+	if sent.Closed || sent.Sent != n || store.Count()-before != n {
+		t.Errorf("resend of a record before 0.5.1: %+v, the store got %d of %d", sent, store.Count()-before, n)
+	}
+	if got, _ := os.ReadFile(file); string(got) != old {
+		t.Error("the resend changed the record before 0.5.1")
+	}
+	if got, _ := os.ReadFile(c.received); strings.Contains(string(got), `"type":"ai.qory.`) {
+		t.Errorf("the server got a type of before 0.5.1:\n%s", got)
 	}
 
 	// A run that still goes.
@@ -1177,7 +1209,7 @@ func TestTheRuntimeSaysHowItIsAskedToLeaveAndTheRunMaySayOtherwise(t *testing.T)
 			if got.RunDir != res.Dir || got.Launch.Command != "sh" || len(got.Forwarder) == 0 {
 				t.Errorf("Prepare was given %+v", got)
 			}
-			started := ofType(events(t, res), "ai.qory.run.started")
+			started := ofType(events(t, res), "dev.qory.run.started")
 			if len(started) != 1 || data(started[0])["runtime"] != "other-agent" {
 				t.Errorf("run.started %v", started)
 			}
@@ -1198,7 +1230,7 @@ func TestNoRuntimeIsABareOneNamedAfterTheCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	started := ofType(events(t, res), "ai.qory.run.started")
+	started := ofType(events(t, res), "dev.qory.run.started")
 	if res.ExitCode != 3 || len(started) != 1 || data(started[0])["runtime"] != "sh" {
 		t.Errorf("%+v %v", res, started)
 	}

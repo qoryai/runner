@@ -22,7 +22,7 @@ import (
 
 var (
 	name      = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-	eventType = regexp.MustCompile(`^ai\.qory\.session\.[a-z_]+$`)
+	eventType = regexp.MustCompile(`^dev\.qory\.session\.[a-z_]+$`)
 )
 
 // Conforms checks what holds of every runtime: a name events can carry, a stop the
@@ -122,7 +122,7 @@ func Replays(t *testing.T, rt runtimes.Runtime, fsys fs.FS, dir string) {
 					t.Errorf("event %d: %q is not a session event's type", i, typ)
 					continue
 				}
-				schema, err := contracts.Compile("events/" + strings.TrimPrefix(typ, "ai.qory.") + ".schema.json")
+				schema, err := contracts.Compile("events/" + strings.TrimPrefix(typ, "dev.qory.") + ".schema.json")
 				if err != nil {
 					t.Errorf("event %d: %s is not an event of the contract: %v", i, typ, err)
 					continue

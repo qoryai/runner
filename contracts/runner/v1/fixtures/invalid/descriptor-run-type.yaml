@@ -9,6 +9,6 @@ sources:
 rules:
   - source: hooks
     match: {hook_event_name: SessionEnd}
-    type: ai.qory.run.exited
+    type: dev.qory.run.exited
     data:
       exit_code: reason

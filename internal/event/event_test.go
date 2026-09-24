@@ -20,7 +20,7 @@ func TestEventsValidateAgainstTheContract(t *testing.T) {
 	e := event.NewEmitter(event.NewRunID(), func() time.Time { return time.Unix(1_800_000_000, 5_000_000) })
 	for _, ev := range []*event.Event{
 		e.Make(event.RunHeartbeat, map[string]any{"elapsed_seconds": 30, "interval_seconds": 30}),
-		e.Make("ai.qory.session.ended", map[string]any{"session_id": "s1", "reason": "other"}),
+		e.Make("dev.qory.session.ended", map[string]any{"session_id": "s1", "reason": "other"}),
 	} {
 		b, err := ev.JSON()
 		if err != nil {

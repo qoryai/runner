@@ -293,8 +293,8 @@ func TestDockerLimitsTheAgentAndRefusesASocket(t *testing.T) {
 	}
 }
 
-// TestDockerReapsWhatARunLeft pins that a reap asks by the run's label and removes the
-// containers before the networks.
+// TestDockerReapsWhatARunLeft pins that a reap asks by the run's label, and by the one
+// it had before 0.5.1, and removes the containers before the networks.
 func TestDockerReapsWhatARunLeft(t *testing.T) {
 	rec := &recorder{t: t, uid: 1000}
 	d := &Docker{sys: rec}
@@ -305,8 +305,13 @@ func TestDockerReapsWhatARunLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := strings.Join(rec.lines, "\n")
-	ps, ls := strings.Index(got, "ps --all --quiet --filter label=ai.qory.run="+runID), strings.Index(got, "network ls --quiet --filter label=ai.qory.run="+runID)
+	ps, ls := strings.Index(got, "ps --all --quiet --filter label=dev.qory.run="+runID), strings.Index(got, "network ls --quiet --filter label=dev.qory.run="+runID)
 	if ps < 0 || ls < ps {
 		t.Errorf("the reap asked:\n%s", got)
+	}
+	// What a runner before 0.5.1 left carries the label it had then.
+	ps, ls = strings.Index(got, "ps --all --quiet --filter label=ai.qory.run="+runID), strings.Index(got, "network ls --quiet --filter label=ai.qory.run="+runID)
+	if ps < 0 || ls < ps {
+		t.Errorf("the reap did not ask by the label before 0.5.1:\n%s", got)
 	}
 }
