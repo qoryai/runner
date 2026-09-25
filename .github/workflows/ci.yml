@@ -69,8 +69,41 @@ jobs:
       - name: Run the suite against Docker
         # The test binary is the relay, the forwarder and the probe inside the enclosure,
         # so it is built static. QORY_WALL_REQUIRE turns a skip into a failure: this job
-        # cannot pass by proving nothing.
+        # cannot pass by proving nothing. The suite with a Docker inside is the next job's.
         env:
           CGO_ENABLED: "0"
           QORY_WALL_REQUIRE: "1"
-        run: go test ./wall/walltest -count=1 -v
+        run: go test ./wall/walltest -count=1 -v -run '^TestDockerConforms$'
+
+  wall-docker:
+    name: Wall conformance, a Docker of the agent's own
+    # The same suite in an enclosure that starts a daemon of its own, under Sysbox, whose
+    # container root is a user of the machine's that is not root. Sysbox is installed on
+    # the machine, as a node's owner installs it.
+    runs-on: ubuntu-latest
+    env:
+      SYSBOX_VERSION: 0.7.1
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install Sysbox
+        # Its package restarts the engine and needs no container running.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          curl -fsSLo sysbox.deb "https://github.com/nestybox/sysbox/releases/download/v${SYSBOX_VERSION}/sysbox-ce_${SYSBOX_VERSION}.linux_amd64.deb"
+          docker rm -f $(docker ps -aq) 2>/dev/null || true
+          sudo apt-get install -y ./sysbox.deb
+          docker info --format '{{json .Runtimes}}' | grep -q sysbox-runc
+
+      - name: Run the suite against Docker, with a Docker inside
+        # QORY_WALL_REQUIRE turns a skip into a failure, as in the wall job.
+        env:
+          CGO_ENABLED: "0"
+          QORY_WALL_REQUIRE: "1"
+          QORY_WALL_RUNTIME: sysbox-runc
+        run: go test ./wall/walltest -count=1 -v -run TestDockerNestedConforms

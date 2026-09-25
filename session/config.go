@@ -1,6 +1,8 @@
 package session
 
 import (
+	"fmt"
+	"regexp"
 	"slices"
 
 	"github.com/qoryai/runner/internal/credential"
@@ -20,6 +22,9 @@ type Policy struct {
 	Credentials []PolicyCredential `json:"credentials,omitempty"`
 	// Tools are the tools of [Spec.Tools] the run may reach, by name.
 	Tools []PolicyTool `json:"tools,omitempty"`
+	// Image is the name of the image of [Spec.Images] the run starts in; empty is the
+	// machine's default, [Spec.Image].
+	Image string `json:"image,omitempty"`
 }
 
 // PolicyTool selects one tool the machine defines.
@@ -60,7 +65,7 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 	if err != nil {
 		return nil, &policy.Error{Name: name, Err: err}
 	}
-	out := &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(p.Egress.Mode), Allow: p.Egress.Allow, Deny: p.Egress.Deny, Paths: p.Egress.Paths}}
+	out := &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(p.Egress.Mode), Allow: p.Egress.Allow, Deny: p.Egress.Deny, Paths: p.Egress.Paths}, Image: p.Image}
 	for _, c := range p.Credentials {
 		out.Credentials = append(out.Credentials, PolicyCredential{Name: c.Name, Argument: c.Argument})
 	}
@@ -78,8 +83,8 @@ func ReadPolicy(name string, b []byte) (*Policy, error) {
 // limit of its own and gets the ceiling, and one in mode enforce gets its entries the
 // ceiling covers; an entry it does not cover is dropped, as a harness declaration's
 // is. Path rules narrow the same way: a host both name keeps the policy's paths the
-// ceiling's cover, and a host one of them names keeps its rules. The credentials and
-// the tools are the policy's own: a ceiling defines them and selects none.
+// ceiling's cover, and a host one of them names keeps its rules. The credentials, the
+// tools and the image are the policy's own: a ceiling defines them and selects none.
 func (p *Policy) Under(ceiling *Policy) *Policy {
 	if ceiling == nil {
 		return p
@@ -96,7 +101,7 @@ func (p *Policy) Under(ceiling *Policy) *Policy {
 	if p.Egress.Mode != string(policy.Enforce) {
 		c := *ceiling
 		c.Egress.Deny = deny
-		c.Credentials, c.Tools = p.Credentials, p.Tools
+		c.Credentials, c.Tools, c.Image = p.Credentials, p.Tools, p.Image
 		return &c
 	}
 	allow := []string{}
@@ -132,7 +137,7 @@ func (p *Policy) Under(ceiling *Policy) *Policy {
 	if len(paths) == 0 {
 		paths = nil
 	}
-	return &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: allow, Deny: deny, Paths: paths}, Credentials: p.Credentials, Tools: p.Tools}
+	return &Policy{Version: p.Version, Egress: PolicyEgress{Mode: string(policy.Enforce), Allow: allow, Deny: deny, Paths: paths}, Credentials: p.Credentials, Tools: p.Tools, Image: p.Image}
 }
 
 // bothDeny is the deny list of a policy under a ceiling: the ceiling's entries, then
@@ -241,3 +246,68 @@ type Tool struct {
 // Check refuses a definition that cannot be one, so a command reading the machine's
 // configuration says so before any run selects it.
 func (t Tool) Check() error { return tool.Definition(t).Check() }
+
+// Image is one image as the machine defines it, [Spec.Images]: what an agent's
+// enclosure is started from, and how. A run's policy selects images by name and names
+// no reference, so a repository never chooses what it runs under.
+type Image struct {
+	// Name is what a policy, or [Spec.Image], selects it by.
+	Name string
+	// Ref is the image's reference, pinned by digest where the machine wants the same
+	// image every time.
+	Ref string
+	// Runtime is the container runtime the wall starts the image under, one the
+	// machine's engine has: sysbox-runc. Empty is the engine's default.
+	Runtime string
+	// Docker gives the agent a Docker daemon of its own, inside the enclosure: the
+	// image holds dockerd, and the wall starts it before the agent. It needs a Runtime
+	// that runs a daemon in a container without privileges. Experimental: see contracts/runner/v1/README.md §The wall.
+	Docker bool
+}
+
+// Check refuses a definition that cannot be one, so a command reading the machine's
+// configuration says so before any run selects it.
+func (i Image) Check() error {
+	if !imageNameShape.MatchString(i.Name) {
+		return fmt.Errorf("the image name %q is not 1 to 64 of a-z, 0-9, underscore, dot and dash", i.Name)
+	}
+	if i.Ref == "" {
+		return fmt.Errorf("image %s: the reference is empty", i.Name)
+	}
+	if i.Docker && i.Runtime == "" {
+		return fmt.Errorf("image %s: a Docker of the agent's own needs a runtime that runs one without privileges, sysbox-runc say", i.Name)
+	}
+	return nil
+}
+
+var imageNameShape = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,63}$`)
+
+// image is the image a run starts in: the one its policy selects, or the machine's
+// default, [Spec.Image], which is the name of one of [Spec.Images] or a reference.
+func image(spec Spec, selected string) (Image, error) {
+	for _, d := range spec.Images {
+		if err := d.Check(); err != nil {
+			return Image{}, err
+		}
+	}
+	if len(spec.Images) > 0 {
+		seen := map[string]bool{}
+		for _, d := range spec.Images {
+			if seen[d.Name] {
+				return Image{}, fmt.Errorf("the image %s is defined twice", d.Name)
+			}
+			seen[d.Name] = true
+		}
+	}
+	name := selected
+	if name == "" {
+		name = spec.Image
+	}
+	if i := slices.IndexFunc(spec.Images, func(d Image) bool { return d.Name == name }); i >= 0 {
+		return spec.Images[i], nil
+	}
+	if selected != "" {
+		return Image{}, fmt.Errorf("the policy selects the image %q, which this machine does not define", selected)
+	}
+	return Image{Ref: spec.Image}, nil
+}

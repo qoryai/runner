@@ -315,3 +315,70 @@ func TestDockerReapsWhatARunLeft(t *testing.T) {
 		t.Errorf("the reap did not ask by the label before 0.5.1:\n%s", got)
 	}
 }
+
+// TestDockerNestedCommandLine pins the agent's command for an image with a Docker of
+// its own: under the named runtime, started as the enclosure's root with the helper as
+// its entry point, which starts the daemon and then the launch as the run's user. The
+// relay is the same as for any image.
+func TestDockerNestedCommandLine(t *testing.T) {
+	rec := &recorder{t: t, gateway: "172.30.0.1", local_: true, uid: 1000}
+	d := &Docker{Helper: "/opt/qory/qory-linux", RelayArgs: []string{"run", "relay"}, NestArgs: []string{"run", "nest"}, sys: rec}
+	e, err := d.Prepare(context.Background(), Request{RunID: runID, Image: "example.com/agent:1-docker", Runtime: "sysbox-runc", Docker: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := launch()
+	l.Proxy = "172.30.0.1:50123"
+	wrapped, err := e.Wrap(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, a := range wrapped.Args {
+		if a == "--env-file" {
+			wrapped.Args[i+1] = "ENVFILE"
+		}
+	}
+	if err := e.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	run := words(append([]string{wrapped.Command}, wrapped.Args...))
+	for _, want := range []string{
+		"--runtime sysbox-runc --user 0:0 --security-opt no-new-privileges --init --mount type=volume,dst=/var/lib/docker",
+		"--entrypoint /qory/qory example.com/agent:1-docker run nest --user 1000:1000 -- claude --settings",
+	} {
+		if !strings.Contains(run, want) {
+			t.Errorf("the agent's command lacks %q:\n%s", want, run)
+		}
+	}
+	if strings.Contains(run, "--cap-drop") || strings.Contains(run, "--privileged") {
+		t.Errorf("the agent's command drops the capabilities the daemon needs, or asks for privileges:\n%s", run)
+	}
+	for _, line := range rec.lines {
+		if strings.Contains(line, "create --name") && (!strings.Contains(line, "--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --init") || strings.Contains(line, "--runtime")) {
+			t.Errorf("the relay is not hardened as for any image, or runs under the image's runtime:\n%s", line)
+		}
+	}
+	golden(t, "nested", strings.Join(rec.lines, "\n")+"\n\nwrapped:\n"+run+"\n")
+}
+
+// TestDockerRefusesANestWithoutItsRuntime pins that a Docker of the agent's own is
+// refused before anything is created without a runtime that nests without privileges,
+// without the helper's arguments that start it, and with a runtime named as a flag.
+func TestDockerRefusesANestWithoutItsRuntime(t *testing.T) {
+	for name, c := range map[string]struct {
+		nest []string
+		req  Request
+	}{
+		"no runtime":          {[]string{"nest"}, Request{RunID: runID, Image: "i", Docker: true}},
+		"no nest args":        {nil, Request{RunID: runID, Image: "i", Runtime: "sysbox-runc", Docker: true}},
+		"a flag as a runtime": {[]string{"nest"}, Request{RunID: runID, Image: "i", Runtime: "--privileged"}},
+	} {
+		rec := &recorder{t: t, uid: 1000}
+		d := &Docker{Helper: "/h", RelayArgs: []string{"relay"}, NestArgs: c.nest, sys: rec}
+		if _, err := d.Prepare(context.Background(), c.req); err == nil {
+			t.Errorf("%s: a wall was prepared", name)
+		} else if len(rec.lines) > 0 {
+			t.Errorf("%s: commands ran before the refusal: %v", name, rec.lines)
+		}
+	}
+}

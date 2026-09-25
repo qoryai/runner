@@ -44,6 +44,8 @@ type report struct {
 	CapEff         string            `json:"cap_eff"`
 	CapPrm         string            `json:"cap_prm"`
 	CapBnd         string            `json:"cap_bnd"`
+	CapInh         string            `json:"cap_inh"`
+	CapAmb         string            `json:"cap_amb"`
 	NoNewPrivs     string            `json:"no_new_privs"`
 	Sockets        []string          `json:"sockets"`
 	HostEnv        bool              `json:"host_env"`
@@ -68,6 +70,7 @@ type report struct {
 	ToolAllowedErr string            `json:"tool_allowed_err"`
 	ToolSaw        string            `json:"tool_saw"`
 	ToolDenied     int               `json:"tool_denied"`
+	Nested         *nested           `json:"nested,omitempty"`
 }
 
 // wait is how long an attempt that must fail is given to fail.
@@ -149,6 +152,10 @@ func probe(args []string) int {
 				r.CapPrm = value
 			case "CapBnd":
 				r.CapBnd = value
+			case "CapInh":
+				r.CapInh = value
+			case "CapAmb":
+				r.CapAmb = value
 			case "NoNewPrivs":
 				r.NoNewPrivs = value
 			}
@@ -193,6 +200,12 @@ func probe(args []string) int {
 			}
 			r.Hook = hook(args[i+1])
 		}
+	}
+
+	// Last, so what the containers it starts send through the proxy is recorded after
+	// everything else.
+	if os.Getenv("PROBE_DOCKER") == "1" {
+		r.Nested = probeNested()
 	}
 
 	b, _ := json.Marshal(r)

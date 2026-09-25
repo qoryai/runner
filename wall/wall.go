@@ -40,6 +40,15 @@ type Request struct {
 	// Image is the agent's image: the runtime and the project's toolchain, built and
 	// pinned by the caller. The wall builds nothing.
 	Image string
+	// Runtime is the container runtime the image is started under, one the engine
+	// has; empty is the engine's default.
+	Runtime string
+	// Docker gives the agent a Docker daemon of its own inside the enclosure. The image
+	// holds dockerd; the wall starts it as the enclosure's root, on a Unix socket alone,
+	// and the agent as its user in the socket's group. It needs a Runtime that runs a
+	// daemon in a container without privileges, whose root is a user of the machine's
+	// that is not root. Experimental: see contracts/runner/v1/README.md §The wall.
+	Docker bool
 }
 
 // Enclosure is one run's wall, built.
