@@ -22,22 +22,13 @@ the same way. CloudEvents adds its own `specversion: 1.0`, which is not ours to 
 
 **Revisions.** This is `v1`, revision 1. The runner announces the revision as one
 integer: the header `X-Qory-Contract-Version: 1` on every request to the server, and
-`contract_version: 1` in the ping's data. A runner that sends neither is revision 0,
-the runners 0.1.0 to 0.3.0, which had no server. A runner on revision N knows every
-section defined up to N and ignores a section it does not know, and a server may rely
-on the sections up to N and no more. An addition is a new revision; a breaking change
-is `v2`. What each revision added:
-
-| Revision | Runner | Adds |
-|---|---|---|
-| 1 | 0.4.0, amended in 0.5.0, 0.5.1 and 0.6.0 | the server (§The server): discovery, signed requests, the run configuration fetched with the run's labels as its query, the digests and the reload. Tools (§Tools): `tools` in the policy and in `dev.qory.run.policy_applied`, and `tool`, `request_id` and `status` in `dev.qory.run.egress`. Images (§Images): `image` in the policy and in `dev.qory.run.policy_applied`, and `image_name`, `container_runtime` and `docker` in `dev.qory.run.started`; `container_runtime` and `docker` belong to an option that is experimental (§The wall) |
-
-Revision 1 was amended in place in 0.5.0, before any server relied on it: the run
-configuration request carries every label of the run, where 0.4 sent `forge` and
-`repository` alone. It was amended in place again in 0.5.1: every event type starts
-`dev.qory.`, where 0.4 and 0.5.0 sent `ai.qory.`. It was amended in place a third time
-in 0.6.0, for tools and images, still before any server relied on it: a runner before
-0.6.0 refuses a policy that selects tools or an image, and its run does not start.
+`contract_version: 1` in the ping's data. A runner on revision N knows every section
+defined up to N and ignores a section it does not know, and a server may rely on the
+sections up to N and no more. An addition is a new revision; a breaking change is `v2`.
+The revision is raised only once a released runner is in use; until then an addition
+goes into the revision the runner sends. Revision 1 is everything this document
+describes: the server (§The server), tools (§Tools) and images (§Images), where
+`container_runtime` and `docker` belong to an option that is experimental (§The wall).
 
 `v1` is the first generation of this namespace, not a stability promise. The runner
 module is at `v0`, which under Go's rules promises no compatibility, and until it
@@ -704,9 +695,7 @@ form is, a space as `+`, so a run labelled `forge: github.com`, `issue: "77"` an
 `repository: acme/shop` fetches `<run.url>?forge=github.com&issue=77&repository=acme%2Fshop`.
 When `run.url` has a query of its own, the labels are added to it, and a label replaces
 a parameter of the same name. The server decides which labels name what the run works
-on and answers the policy for that; the runner reads nothing into them. A runner before
-0.5.0 sent `forge` and `repository` alone, and a server that reads only those finds
-them the same way from either. The labels are bounded, at most 16, a key of at
+on and answers the policy for that; the runner reads nothing into them. The labels are bounded, at most 16, a key of at
 most 64 bytes that needs no encoding and a value of at most 256 bytes, which is at most
 768 once encoded, so the query the labels make is at most 13,343 bytes; a server whose
 front end limits a request line to less refuses the longest of them. The reference
@@ -777,9 +766,7 @@ it: refused while the lock is held; then what the run's wall left behind is remo
 the run's label; a record with no `dev.qory.run.exited` gets one, numbered on from the
 last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`; and every
 event the server's filter wants that no accepted batch named is posted, in order, in
-batches cut the same way, until accepted or given up on. The record of a runner
-before 0.5.1 is sent with each type under `dev.qory.`, and the file keeps what was
-written. The resend fetches the configuration document first, as a run does, and posts
+batches cut the same way, until accepted or given up on. The resend fetches the configuration document first, as a run does, and posts
 where it says. What is still not accepted is under `undelivered/` again. A receiver
 sees some events twice when the runner died between an answer and its line, and
 discards them by `id` as ever. Nothing of this recovers a machine that died: the record

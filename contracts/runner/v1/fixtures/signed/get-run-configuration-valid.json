@@ -10,5 +10,5 @@
   },
   "body": null,
   "expect": 200,
-  "note": "The run configuration fetch for a run labelled forge github.com and repository acme/shop, signed at 1700000000. The query is signed exactly as sent: the slash in the repository stays percent-encoded in the canonical string. This is the form of a runner before 0.5.0, which carried these two labels alone; a receiver still accepts it."
+  "note": "The run configuration fetch for a run labelled forge github.com and repository acme/shop, signed at 1700000000. The query is signed exactly as sent: the slash in the repository stays percent-encoded in the canonical string."
 }
