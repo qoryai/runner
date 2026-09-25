@@ -12,6 +12,9 @@
 //     route out leads to that proxy, and removes the enclosure at exit
 //   - keeps every credential of the runner's out of the session: the session's
 //     environment is the caller's plus the proxy and socket variables, nothing else
+//   - behind a wall, starts the tools the policy selects outside the enclosure, hands
+//     each the requests to the hosts it serves that the policy lets through, and stops
+//     them when the run ends
 //   - heartbeats while the runtime runs and reports the exit as the result
 //   - with a server configured and the spec not local, fetches the server's
 //     configuration document with a signed GET, and the run configuration it names,

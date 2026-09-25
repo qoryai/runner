@@ -20,9 +20,9 @@ descriptor are on this side: the objects the command hands the runner and the on
 control plane delivers over the wire, and the compose report `qory` writes is versioned
 the same way. CloudEvents adds its own `specversion: 1.0`, which is not ours to change.
 
-**Revisions.** This is `v1`, revision 1. The runner announces the revision as one
-integer: the header `X-Qory-Contract-Version: 1` on every request to the server, and
-`contract_version: 1` in the ping's data. A runner that sends neither is revision 0,
+**Revisions.** This is `v1`, revision 2. The runner announces the revision as one
+integer: the header `X-Qory-Contract-Version: 2` on every request to the server, and
+`contract_version: 2` in the ping's data. A runner that sends neither is revision 0,
 the runners 0.1.0 to 0.3.0, which had no server. A runner on revision N knows every
 section defined up to N and ignores a section it does not know, and a server may rely
 on the sections up to N and no more. An addition is a new revision; a breaking change
@@ -31,6 +31,7 @@ is `v2`. What each revision added:
 | Revision | Runner | Adds |
 |---|---|---|
 | 1 | 0.4.0 | the server (§The server): discovery, signed requests, the run configuration fetched with the run's labels as its query, the digests and the reload |
+| 2 | 0.6.0 | tools (§Tools): `tools` in the policy and in `dev.qory.run.policy_applied`, and `tool`, `request_id` and `status` in `dev.qory.run.egress`. A server sends a run configuration that selects tools only to a runner that announced revision 2 or later; an earlier runner refuses the policy, and the run does not start |
 
 Revision 1 was amended in place in 0.5.0, before any server relied on it: the run
 configuration request carries every label of the run, where 0.4 sent `forge` and
@@ -65,7 +66,9 @@ The runner's duties, in the order that matters when they conflict:
    session runs with the developer's own environment. Behind a wall the runner holds the
    credentials the run's policy selects, in memory and outside the enclosure, and its
    proxy sets each on the requests to the hosts it is for (§Credentials): the session
-   reaches a code host and a model endpoint as itself and never reads what it is.
+   reaches a code host and a model endpoint as itself and never reads what it is. The
+   tools the policy selects run outside as well, and the proxy hands them the requests to
+   the hosts they serve (§Tools).
 4. **Liveness.** A heartbeat while the session runs; the exit as the result.
 5. **Reporting.** The session's terminal bytes as log chunks, the runner's observations
    as events, the runtime's own output mapped to session events by a descriptor. Every
@@ -83,9 +86,9 @@ Stated so a receiver reads the record for what it is.
 
 - The proxy sees host names and ports, never the content of a TLS connection: a
   `CONNECT` tunnel is a blind relay once established. The exception is stated in the
-  run's record: behind a wall, for a host the run holds a credential for or has path
-  rules for, the proxy ends the session's TLS itself and reads each request's method and
-  path. `dev.qory.run.policy_applied` lists those hosts as `terminated`, and no other
+  run's record: behind a wall, for a host the run holds a credential for, a tool serves
+  or has path rules for, the proxy ends the session's TLS itself and reads each
+  request's method and path. `dev.qory.run.policy_applied` lists those hosts as `terminated`, and no other
   host is read.
 - On a terminated host the session's side of the connection is HTTP/1.1, so a protocol
   that needs HTTP/2 end to end, gRPC say, does not work there, and a program that pins
@@ -211,12 +214,14 @@ server decides which labels name what the run works on. The `qory` command, for 
 labels a run in a git checkout with `forge` and `repository` from its origin remote, and
 a server that keys its policies on those finds them there.
 
-Behind a wall, three steps differ and no event does. Before step 5 the runner asks the
-wall to prepare the enclosure and listens where the enclosure says, not on loopback.
+Behind a wall, three steps differ and no event does. Before step 5 the runner starts the
+tools the policy selects and waits until each listens (§Tools), then asks the wall to
+prepare the enclosure and listens where the enclosure says, not on loopback.
 After step 6 it hands the wall the launch, the proxy's address, the socket and the
 run directory, read-only, and starts the command the wall returns, on the same pseudo-terminal or
 pipes; the proxy and socket variables inside name the addresses the enclosure reaches
-them on. After step 9 it closes the wall, which removes everything it created.
+them on. After step 9 it closes the wall, which removes everything it created, and stops
+the tools.
 `dev.qory.run.started` carries `wall` and `image`.
 
 Under a node runner, step 1 is the node runner handing the same spec down through the
@@ -250,6 +255,7 @@ egress:
 | `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, whatever `allow` says, and the entry is the rule reported. Absent is empty |
 | `egress.paths` | by host, in `allow`'s grammar, the paths the session may ask of it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. An empty list is no path at all |
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say. A policy defines none (§Credentials) |
+| `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one. A policy defines none (§Tools). Revision 2 |
 
 **The harness's declared hosts.** The harness compose reports the hosts its modules
 declared, the command hands that list to the runner, and `dev.qory.run.policy_applied`
@@ -295,6 +301,16 @@ the machine: git reports `HTTP 403` and fails, the record holds the denied `POST
 nothing reaches the repository, whatever the token itself may do. Rules match the path
 and never the query, so the `info/refs` a push asks first is allowed; it lists what a
 fetch already saw.
+
+*What a path rule does not read.* A rule reads the request's path and nothing else:
+not its query, not its headers, not its body. What a request names there, the rule does
+not see: a subresource asked for in the query, `?acl` say; a listing whose prefix is a
+query parameter, on a host that lists at `/`; a copy that names its source in a header,
+which writes under an allowed path what it read from another; a GraphQL body that names
+any repository the token reaches. A path rule holds a run to the paths it names, and
+promises nothing about the rest. That is bounded by the credential's own scope, or by
+what serves the host, and whoever writes the policy for a host that takes such requests
+checks them there or leaves the host out.
 
 ## Credentials
 
@@ -369,6 +385,94 @@ event per request, `method: HTTPS` with `request_method`, `path` without its que
 `path_rule`, and `credential`, the name of the one the proxy set. No event, no report
 and no error carries a token.
 
+## Tools
+
+A tool is a program of the machine's that serves hosts, for what a run reaches that
+needs more than a token in a header: a request signed with a key the session never
+holds, a protocol with an exchange of its own, a service that exists only on the
+machine, an MCP server say. The runner knows no protocol and a tool knows one, so no
+protocol, cloud or provider enters the runner. The machine defines tools; the run's
+policy selects among them by name, with an argument, as it selects credentials, and
+defines none. Tools need a wall, as credentials do.
+
+| Definition | Meaning |
+|---|---|
+| name | what a policy selects it by, in a credential's grammar |
+| command | the program and its arguments; `${argument}` in an argument is replaced by the policy's argument |
+| argument | a regular expression the policy's argument must match whole; none means a policy passes none |
+| serves | the hosts whose requests go to the tool, in `egress.allow`'s grammar; at least one |
+| placeholders | variables the enclosure gets with the placeholder value, as a credential's (§Credentials) |
+
+```yaml
+# the run's policy
+egress:
+  mode: enforce
+  allow: [files.tools.internal]
+  paths:
+    files.tools.internal: [/media/acme/shop/*]
+tools:
+  - {name: files, argument: acme/shop}
+```
+
+**Starting.** Before the runtime starts, the runner starts every selected tool outside
+the enclosure: the command, with `${argument}` replaced by the argument, one word of the
+command line and never a shell's; the runner's own environment, without the variables
+the machine's credentials are read from, with `QORY_TOOL_LISTEN`,
+the path of a Unix socket in a private directory of the runner's, mode `0700`, and
+`QORY_RUN_ID`. The tool listens there within a minute; one that exits first, or does
+not, is no run, and the last line it wrote to standard error is the reason given. From
+then on what it writes to standard error is reported as the runner's own lines and its
+standard output is discarded. A tool that exits while the run goes on is reported and
+not started again: a request to it is a failed dial. When the run ends, once the proxy is
+closed, the runner sends SIGTERM to the tool's process group, SIGKILL five seconds
+later, and removes the socket.
+
+**Reaching one.** For the hosts a tool serves, the proxy ends the session's TLS as for a
+credential's host, decides the host and the path by the policy as for any host, and
+hands every request it lets through to the tool over the socket, as HTTP/1.1, streamed
+both ways: the request as the session sent it, its query, headers, body and trailers,
+placeholders included, with the `Host` the connection was decided on. A plain request to
+such a host goes the same way. The proxy never dials a host a tool serves, so the host
+need not exist: a tool with no host of its own serves a name the machine's owner
+chooses, under `.internal` say, which no public name will ever be, and the session
+reaches it like any host. The proxy sets two headers of its own, after taking every
+header and trailer whose name starts `Qory-` off the request, in any case and with an
+underscore for the dash, so a tool reads them as the proxy's word, and a session that
+names them in `Connection` does not take them off:
+
+| Header | Value |
+|---|---|
+| `Qory-Request-Id` | the proxy's id of the request, 32 lower-case hex digits: the `request_id` of its `dev.qory.run.egress` |
+| `Qory-Path-Rule` | the path rule that let the request through; `none` when the host has path rules and, under `observe`, none covers the path, which a tool that holds a run to its rules refuses; absent when the host has no path rules |
+
+The argument is not repeated per request: a tool started for the run has it on its
+command line.
+
+**What the tool decides.** A path rule reads the path and nothing else (§The policy), so
+what a request names in its query, its headers or its body is the tool's to check,
+against its argument and the path rule it is handed. A tool refines inside what the
+runner allowed and never widens it: a request the rules refuse never reaches it. What a
+tool sends on, and where, leaves from the machine and not through the proxy, and is in
+the record only as the request that reached the tool. A tool that forwards a request
+unchanged sends the placeholder with it; replacing or dropping it is the tool's.
+
+**What cannot hold** is no run: a name the machine does not define, a tool selected
+twice, an argument the definition does not provide for, a host two tools serve, a host a
+tool serves and a credential is for, under `enforce` a host the run's allow list does not
+cover, and a value the run passes for a tool's placeholder. The tools a run has are fixed
+when it starts: a run configuration that selects other tools, or another argument, fails
+the reload, and the policy in force stays.
+
+**The record.** `dev.qory.run.policy_applied` lists the tools, `name` and `hosts`, and
+their hosts among `terminated`. Every request to a tool's host is one
+`dev.qory.run.egress`, a tool invocation: `method: HTTPS`, or `HTTP` for a plain request,
+with `request_method`, `path` without its query, `path_rule`, `tool`, the tool's name,
+`request_id`, and, once the tool answered, `status`. A request a path rule refuses names
+the tool it did not reach, with `decision: denied`; a connection the policy refuses by
+its host, by the deny list, the guard or the allow list, names none. The runner reads no body, so what an
+invocation did beyond its method and its path is the tool's to know; the runtime's hooks
+name the MCP call an agent made (`dev.qory.session.tool_started`).
+
 ## The events
 
 Every event is a [CloudEvents 1.0](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md)
@@ -397,10 +501,10 @@ The types, one namespace. The runner's own:
 |---|---|---|
 | `dev.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version` |
 | `dev.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
-| `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration took effect | `mode`, `allow`, `deny`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `terminated` |
+| `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration took effect | `mode`, `allow`, `deny`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `tools`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size took effect; never on pipes | `cols`, `rows` |
-| `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_method`, `path`, `path_rule`, `credential` |
+| `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
 | `dev.qory.run.heartbeat` | every `interval_seconds` while the runtime runs | `elapsed_seconds`, `interval_seconds` |
 | `dev.qory.run.exited` | the runtime exited; the result and the last event | `state`, `exit_code`, `signal`, `reason`, `duration_ms` |
 
@@ -455,7 +559,9 @@ as its header carried it, with `fetched`; `allow` and `deny` are the policy's tw
 as written, `deny` the hosts denied by name in either mode. `dev.qory.run.egress` says
 what became of the connection in `outcome`: `connected`, the dial succeeded;
 `dial_failed`, allowed and the dial failed; `refused`, not dialled, because the policy
-or the wall's guard denied it, or closed by a reload.
+or the wall's guard denied it, or closed by a reload. An event that is one request, a
+plain one or one inside a terminated connection, carries the proxy's `request_id` for
+it, and `status`, the status the host or the tool answered, when one answered.
 
 The log is an event like the others. `bytes` is base64 of the chunk as the runtime
 wrote it, terminal escapes included. On pipes the runtime's standard output and standard
@@ -491,7 +597,7 @@ of the old size and the chunks after it to one of the new. On pipes there is no
   were installed.
 - `undelivered/`: the batches the server did not accept, when there were any.
 
-`fixtures/run/<id>/` is one such directory, recorded. The control plane's CI replays it.
+`fixtures/run/<id>/` are such directories, recorded. The control plane's CI replays them.
 
 ## The server
 
@@ -826,8 +932,8 @@ for all of them.
 When the run has an authority of its own (§Credentials), a wall gives the enclosure
 one bundle to trust, the image's own authorities with the run's certificate after them,
 and points the variables programs read a bundle's path from at it: `SSL_CERT_FILE`,
-`GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`
-unless the caller names others. The bundle is the image's and one more, never the run's
+`GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and
+`AWS_CA_BUNDLE` unless the caller names others. The bundle is the image's and one more, never the run's
 alone, because those variables replace a program's trust and do not add to it; an image
 that keeps a bundle nowhere known gets the run's alone and reaches only the terminated
 hosts over TLS, which is the image's to mend. The authority's key never crosses.
@@ -885,13 +991,13 @@ builds none.
 
 | Directory | Holds | Validated against |
 |---|---|---|
-| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list | `policy.schema.json` |
+| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the published key and secret | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server answers: events only, with a run section, with a section this revision does not know | `configuration.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server answers | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: the ping, a first batch | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the published key and secret, with the status a receiver answers | the receiver, replaying each with its clock at `1700000000` |
-| `fixtures/run/<id>/` | one recorded run: `events.jsonl` and `output.log` | `event.schema.json` per line, plus the sequence, source and concatenation rules |
+| `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool | `event.schema.json` per line, plus the sequence, source and concatenation rules |
 | `fixtures/invalid/` | documents each schema refuses, named `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 

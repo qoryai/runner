@@ -1,0 +1,6 @@
+# A tool is selected by name.
+version: 1
+egress:
+  mode: enforce
+tools:
+  - argument: acme/shop

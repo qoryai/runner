@@ -146,7 +146,7 @@ func newVerified(t *testing.T) *verified {
 	v.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		v.seen = r
 		v.body, _ = io.ReadAll(r.Body)
-		if r.Header.Get("User-Agent") != "qory-runner/test" || r.Header.Get(server.HeaderAccessKey) != key || r.Header.Get(server.HeaderContractVersion) != "1" {
+		if r.Header.Get("User-Agent") != "qory-runner/test" || r.Header.Get(server.HeaderAccessKey) != key || r.Header.Get(server.HeaderContractVersion) != strconv.Itoa(server.Revision) {
 			t.Errorf("%s %s: headers %v", r.Method, r.URL, r.Header)
 		}
 		if r.Method == http.MethodGet {

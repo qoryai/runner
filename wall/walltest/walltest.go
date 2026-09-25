@@ -51,6 +51,7 @@ const (
 	modeRelay   = "relay"
 	modeForward = "forward"
 	modeProbe   = "probe"
+	modeTool    = "tool"
 )
 
 // RelayArgs are the arguments that make the helper run the relay.
@@ -73,6 +74,13 @@ const (
 	placeholderVar = "PROBE_TOKEN"
 	credentialHost = "credential.invalid"
 	credentialPath = "/inside-the-paths"
+)
+
+// What the suite's tool is: the test binary on this machine, serving a name that
+// exists nowhere, held to one prefix of its paths.
+const (
+	toolHost  = "tool.walltest.invalid"
+	toolPaths = "/tool/*"
 )
 
 // hostOnly is a variable the suite sets in its own environment and must not find
@@ -101,6 +109,8 @@ func Main() {
 		os.Exit(0)
 	case modeProbe:
 		os.Exit(probe(os.Args[2:]))
+	case modeTool:
+		os.Exit(serveTool())
 	}
 }
 
@@ -198,7 +208,7 @@ func Run(t *testing.T, o Options) {
 		}
 	}
 	originHost := mustHost(t, o.Origin)
-	check("what went through the proxy is recorded", fmt.Sprint(egress) == "["+originHost+" allowed "+originHost+" denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address "+originHost+" denied "+originHost+" "+credentialHost+" denied "+credentialHost+" "+credentialHost+" allowed "+credentialHost+"]", egress)
+	check("what went through the proxy is recorded", fmt.Sprint(egress) == "["+originHost+" allowed "+originHost+" denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address "+originHost+" denied "+originHost+" "+credentialHost+" denied "+credentialHost+" "+credentialHost+" allowed "+credentialHost+" "+toolHost+" allowed "+toolHost+" "+toolHost+" denied "+toolHost+"]", egress)
 	check("a host held to paths is held to them", p.PathDenied == 403, fmt.Sprintf("a path outside the host's answered %d", p.PathDenied))
 	check("a terminated host is answered with the run's authority, held to the credential's paths", p.TLSDenied == 403 && p.TLSAllowed == 502,
 		fmt.Sprintf("outside the paths answered %d (%s), inside them %d (%s), want the proxy's 403 and, with nothing upstream, its 502; the bundle is %q with %d certificates", p.TLSDenied, p.TLSDeniedErr, p.TLSAllowed, p.TLSAllowedErr, p.Bundle, p.BundleCerts))
@@ -209,6 +219,14 @@ func Run(t *testing.T, o Options) {
 		}
 	}
 	check("the credential is set outside, on its own paths", set == "suite", fmt.Sprintf("the request inside the credential's paths is recorded with the credential %q", set))
+	var invoked map[string]any
+	for _, e := range r.events {
+		if d, _ := e["data"].(map[string]any); e["type"] == "dev.qory.run.egress" && d["path"] == "/tool/inside" {
+			invoked = d
+		}
+	}
+	check("a tool is reached through the proxy, held to its paths, and handed the proxy's word", p.ToolAllowed == 200 && p.ToolDenied == 403 && p.ToolSaw == "rule=/tool/* id="+fmt.Sprint(invoked["request_id"]) && invoked["tool"] == "suite-tool" && invoked["status"] == float64(200),
+		fmt.Sprintf("inside the paths answered %d (%s), handed %q; outside them %d; recorded as %v", p.ToolAllowed, p.ToolAllowedErr, p.ToolSaw, p.ToolDenied, invoked))
 	record, _ := os.ReadFile(filepath.Join(r.res.Dir, "events.jsonl"))
 	check("no credential inside the enclosure", p.Placeholder == credential.Placeholder && len(p.TokenSeen) == 0 && p.BundleCerts > 0 && p.BundleKeys == 0 && !bytes.Contains(record, []byte(tokenMark)),
 		fmt.Sprintf("the placeholder is %q; the token was seen in %v; the bundle holds %d certificates and %d keys; the token is in the record: %v", p.Placeholder, p.TokenSeen, p.BundleCerts, p.BundleKeys, bytes.Contains(record, []byte(tokenMark))))
@@ -304,13 +322,18 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		t.Fatal(err)
 	}
 	// The metadata address is in the list to show that no entry opens it.
-	allow := []string{mustHost(t, h.origin), "169.254.169.254", credentialHost}
+	allow := []string{mustHost(t, h.origin), "169.254.169.254", credentialHost, toolHost}
 	if h.named {
 		allow = append(allow, "127.0.0.1")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	rt, err := claude.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The tool runs on this machine, outside the enclosure: this binary, not the helper.
+	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,8 +355,10 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		Stdout:      &out,
 		Stderr:      &errs,
 		Policy: &session.Policy{Version: 1,
-			Egress:      session.PolicyEgress{Mode: "enforce", Allow: allow, Paths: map[string][]string{mustHost(t, h.origin): {"/"}}},
-			Credentials: []session.PolicyCredential{{Name: "suite"}}},
+			Egress:      session.PolicyEgress{Mode: "enforce", Allow: allow, Paths: map[string][]string{mustHost(t, h.origin): {"/"}, toolHost: {toolPaths}}},
+			Credentials: []session.PolicyCredential{{Name: "suite"}},
+			Tools:       []session.PolicyTool{{Name: "suite-tool"}}},
+		Tools:         []session.Tool{{Name: "suite-tool", Command: []string{exe, modeTool}, Serves: []string{toolHost}}},
 		Credentials:   []session.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}},
 		Forwarder:     o.Forwarder,
 		Wall:          o.Wall,

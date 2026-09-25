@@ -93,8 +93,8 @@ type system interface {
 }
 
 // DefaultCAEnv are the variables the common programs read a bundle's path from:
-// OpenSSL and Go, git, Node, Python's requests, curl.
-var DefaultCAEnv = []string{"SSL_CERT_FILE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
+// OpenSSL and Go, git, Node, Python's requests, curl, the AWS CLI and botocore.
+var DefaultCAEnv = []string{"SSL_CERT_FILE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "AWS_CA_BUNDLE"}
 
 // imageBundles are where an image keeps its authorities: Debian and Alpine, Red Hat,
 // OpenSUSE, and the OpenSSL default.

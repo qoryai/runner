@@ -376,8 +376,10 @@ func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 	var mu sync.Mutex
 	got := map[string]string{}
 	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
 		mu.Lock()
 		got[r.URL.Path] = r.Header.Get("Authorization") + "|" + r.Host
+		got["trailer"+r.URL.Path] = r.Trailer.Get("X-Checksum")
 		mu.Unlock()
 		if r.URL.Path == "/acme/shop/expired" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -404,7 +406,7 @@ func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 	p.Terminate(ca, []proxy.Credential{{
 		Name: "product", Hosts: []string{host}, Scheme: "basic", Username: "x-access-token", Paths: []string{"/acme/shop/*", "/graphql"},
 		Token: func() string { return "the-token" }, Rejected: func() { rejected++ },
-	}}, nil)
+	}}, nil, nil)
 
 	trusted := x509.NewCertPool()
 	trusted.AppendCertsFromPEM(ca.PEM())
@@ -444,8 +446,25 @@ func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 		t.Errorf("a request naming another Host: %d", code)
 	}
 	get("/acme/shop/expired")
+	// A body of unknown length goes chunked, and its trailer reaches the host.
+	pr, pw := io.Pipe()
+	put, _ := http.NewRequest("PUT", "https://"+net.JoinHostPort(host, port)+"/acme/shop/upload", pr)
+	put.Trailer = http.Header{"X-Checksum": nil}
+	go func() {
+		io.WriteString(pw, "a body")
+		put.Trailer.Set("X-Checksum", "the-sum")
+		pw.Close()
+	}()
+	if resp, err := client.Do(put); err != nil {
+		t.Errorf("an upload with a trailer: %v", err)
+	} else {
+		resp.Body.Close()
+	}
 	mu.Lock()
 	defer mu.Unlock()
+	if got["trailer/acme/shop/upload"] != "the-sum" {
+		t.Errorf("the host got the trailer %q", got["trailer/acme/shop/upload"])
+	}
 	if got["/acme/shop/pulls"] != want+"|"+net.JoinHostPort(host, port) {
 		t.Errorf("the origin saw %q on a covered path", got["/acme/shop/pulls"])
 	}
@@ -470,7 +489,7 @@ func TestTerminateSetsTheCredentialAndHoldsThePaths(t *testing.T) {
 			t.Errorf("a query in the record: %+v", d)
 		}
 	}
-	if first.Method != "HTTPS" || first.RequestMethod != "GET" || first.Credential != "product" || first.PathRule != "/acme/shop/*" || !first.Allowed || first.Outcome != proxy.Connected {
+	if first.Method != "HTTPS" || first.RequestMethod != "GET" || first.Credential != "product" || first.PathRule != "/acme/shop/*" || !first.Allowed || first.Outcome != proxy.Connected || first.Status != 200 || first.RequestID == "" || first.Tool != "" {
 		t.Errorf("the covered request was recorded as %+v", first)
 	}
 	for _, d := range decisions {
@@ -509,7 +528,7 @@ func TestSetPolicySwapsTheCredentialsWithThePolicy(t *testing.T) {
 	cred := func(name, token string) []proxy.Credential {
 		return []proxy.Credential{{Name: name, Hosts: []string{host}, Scheme: "bearer", Token: func() string { return token }}}
 	}
-	p.Terminate(ca, cred("first", "token-one"), nil)
+	p.Terminate(ca, cred("first", "token-one"), nil, nil)
 	if !p.Terminates() {
 		t.Fatal("Terminates is false after Terminate")
 	}
