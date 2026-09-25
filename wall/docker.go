@@ -108,13 +108,13 @@ var imageBundles = []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/
 // starts with a dash is a flag to the command that reads it: a run id names things, an
 // image is a reference, a user is uid[:gid] or a name, a variable is NAME=value.
 var (
-	runIDShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
-	imageShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
+	runIDShape   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
+	imageShape   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
 	runtimeShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
-	userShape  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?$`)
-	envShape   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
-	cpusShape  = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
-	bytesShape = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
+	userShape    = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?$`)
+	envShape     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+	cpusShape    = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+	bytesShape   = regexp.MustCompile(`^[0-9]+[bkmgBKMG]?$`)
 )
 
 // Name is docker, or the command's name when another was given.
@@ -149,7 +149,7 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	if req.Docker && len(d.NestArgs) == 0 {
 		return nil, errors.New("wall docker: a Docker of the agent's own needs the helper's arguments that start it")
 	}
-		if d.Helper == "" || len(d.RelayArgs) == 0 {
+	if d.Helper == "" || len(d.RelayArgs) == 0 {
 		return nil, errors.New("wall docker: the helper binary and its relay arguments are required")
 	}
 	if err := sys.checkHelper(d.Helper); err != nil {
