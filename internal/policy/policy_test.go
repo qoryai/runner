@@ -220,3 +220,30 @@ func TestAPolicySelectsAnImageByName(t *testing.T) {
 		t.Error("a reference was read as an image's name")
 	}
 }
+
+// TestAnArgumentHasAtMost4096Characters pins the cap on a credential's and a tool's
+// argument: 4096 characters read, room for several repositories in one argument, and
+// 4097 are refused. The fixtures hold the same two lengths.
+func TestAnArgumentHasAtMost4096Characters(t *testing.T) {
+	l, err := policy.Read("enforce-long-argument.yaml", fixture(t, "fixtures/policy/enforce-long-argument.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(l.Policy.Credentials) != 1 || len(l.Policy.Credentials[0].Argument) != 4096 ||
+		len(l.Policy.Tools) != 1 || len(l.Policy.Tools[0].Argument) != 4096 {
+		t.Errorf("the fixture's arguments are not 4096 characters: %+v", l.Policy)
+	}
+	for _, name := range []string{"fixtures/invalid/policy-credential-argument-too-long.yaml", "fixtures/invalid/policy-tool-argument-too-long.yaml"} {
+		if _, err := policy.Read(name, fixture(t, name)); err == nil {
+			t.Errorf("%s was read", name)
+		}
+	}
+	for _, kind := range []string{"credentials", "tools"} {
+		for n, ok := range map[int]bool{4096: true, 4097: false} {
+			doc := `{"version":1,"egress":{"mode":"enforce"},"` + kind + `":[{"name":"acme","argument":"` + strings.Repeat("a", n) + `"}]}`
+			if _, err := policy.Read("policy", []byte(doc)); (err == nil) != ok {
+				t.Errorf("%s: an argument of %d characters: %v", kind, n, err)
+			}
+		}
+	}
+}

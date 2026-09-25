@@ -94,6 +94,11 @@ release may change what an existing document does, and says so under Upgrading.
 - The contract says what a path rule does not read: a request's query, headers and
   body. A subresource in the query, a listing's prefix, a copy's source in a header and
   a GraphQL body are outside what a rule holds a run to.
+- A policy's credential and tool `argument` may have up to 4096 characters, where it
+  had 256, so one argument holds several repositories, `acme/shop,acme/lib`. The cap
+  bounds only the size of the run's record: what guards the argument is the
+  definition's pattern, which must match it whole, and it reaches the program as one
+  word, with no shell.
 
 ### Fixed
 

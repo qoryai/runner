@@ -256,8 +256,8 @@ egress:
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. Absent is empty, and `enforce` with an empty list reaches nothing |
 | `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, whatever `allow` says, and the entry is the rule reported. Absent is empty |
 | `egress.paths` | by host, in `allow`'s grammar, the paths the session may ask of it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. An empty list is no path at all |
-| `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say. A policy defines none (§Credentials) |
-| `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one. A policy defines none (§Tools) |
+| `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say, of at most 4096 characters. A policy defines none (§Credentials) |
+| `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one, of at most 4096 characters. A policy defines none (§Tools) |
 | `image` | the image of the machine's the run starts in, by the machine's name for it; absent is the machine's default. A policy names no reference and defines no image (§Images) |
 
 **The harness's declared hosts.** The harness compose reports the hosts its modules
@@ -1095,7 +1095,7 @@ the option experimental.
 
 | Directory | Holds | Validated against |
 |---|---|---|
-| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool | `policy.schema.json` |
+| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each given an argument of 4096 characters, the most one may have | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the published key and secret | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server answers: events only, with a run section, with a section this revision does not know | `configuration.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server answers | `run-configuration.schema.json` |

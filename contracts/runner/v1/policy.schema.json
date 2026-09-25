@@ -62,7 +62,7 @@
         "required": ["name"],
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
-          "argument": {"description": "What the run asks the credential for, a repository say, given to the definition's adapter as one argument. The definition says what an argument may look like; one it does not provide for is no run.", "type": "string", "minLength": 1, "maxLength": 256}
+          "argument": {"description": "What the run asks the credential for, a repository say, given to the definition's adapter as one argument. The definition says what an argument may look like; one it does not provide for is no run. At most 4096 characters, which leaves room for several repositories in one argument, acme/shop,acme/lib. The cap bounds only the size of the run's record, not what the argument may say: what guards it is the definition's pattern, which must match it whole, and it reaches the program as one word, with no shell.", "type": "string", "minLength": 1, "maxLength": 4096}
         }
       }
     },
@@ -75,7 +75,7 @@
         "required": ["name"],
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
-          "argument": {"description": "What the run asks the tool for, a repository or a prefix say, given to the definition's command as one argument. The definition says what an argument may look like; one it does not provide for is no run.", "type": "string", "minLength": 1, "maxLength": 256}
+          "argument": {"description": "What the run asks the tool for, a repository or a prefix say, given to the definition's command as one argument. The definition says what an argument may look like; one it does not provide for is no run. At most 4096 characters, which leaves room for several repositories in one argument, acme/shop,acme/lib. The cap bounds only the size of the run's record, not what the argument may say: what guards it is the definition's pattern, which must match it whole, and it reaches the program as one word, with no shell.", "type": "string", "minLength": 1, "maxLength": 4096}
         }
       }
     },
