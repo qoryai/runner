@@ -25,7 +25,7 @@ const Version = "v1"
 // integer the runner sends as X-Qory-Contract-Version and as contract_version in the
 // ping. A runner that sends none is revision 0. A revision adds; a breaking change is
 // a new Version.
-const Revision = 2
+const Revision = 1
 
 //go:embed all:runner
 var embedded embed.FS

@@ -31,7 +31,7 @@
       }
     },
     "tools": {
-      "description": "The tools the run reaches, started before the runtime: each one's name and the hosts it serves. Fixed for the run: a later policy_applied repeats them. Added in revision 2.",
+      "description": "The tools the run reaches, started before the runtime: each one's name and the hosts it serves. Fixed for the run: a later policy_applied repeats them.",
       "type": "array",
       "items": {
         "type": "object",
@@ -43,7 +43,7 @@
         }
       }
     },
-    "image": {"description": "The name of the machine's image the policy selects, which the run started in. Absent when the policy selects none and the machine's default was used. Fixed for the run. Added in revision 2.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
+    "image": {"description": "The name of the machine's image the policy selects, which the run started in. Absent when the policy selects none and the machine's default was used. Fixed for the run.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
     "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "harness_hosts": {"description": "The egress the harness declared, as handed to the runner, when it was. Information only: it decides nothing.", "type": "array", "items": {"type": "string", "minLength": 1}}
   },

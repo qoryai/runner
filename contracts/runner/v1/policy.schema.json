@@ -67,7 +67,7 @@
       }
     },
     "tools": {
-      "description": "The tools of the machine's this run may reach, by name, behind a wall. The runner starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and hands it every request to them the policy lets through. A name the machine does not define is no run. Added in revision 2.",
+      "description": "The tools of the machine's this run may reach, by name, behind a wall. The runner starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and hands it every request to them the policy lets through. A name the machine does not define is no run.",
       "type": "array",
       "items": {
         "type": "object",
@@ -80,7 +80,7 @@
       }
     },
     "image": {
-      "description": "The image of the machine's the run starts in, by name, behind a wall. The machine defines its images, a reference and the runtime the wall starts it under; the policy selects one and names no reference. Absent means the machine's default. A name the machine does not define is no run, and the image is fixed when the run starts. Added in revision 2.",
+      "description": "The image of the machine's the run starts in, by name, behind a wall. The machine defines its images, a reference and the runtime the wall starts it under; the policy selects one and names no reference. Absent means the machine's default. A name the machine does not define is no run, and the image is fixed when the run starts.",
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
     }

@@ -8,17 +8,15 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Upgrading
 
-- The contract is `v1` revision 2, and the runner sends `X-Qory-Contract-Version: 2`
-  and `contract_version: 2` in the ping. A server may put `tools` in a run
-  configuration's policy only for a runner that announced 2: an earlier runner's schema
-  refuses the policy, and its run does not start. `dev.qory.run.egress` carries three
-  fields it did not, `tool`, `request_id` and `status`; a receiver that validates event
-  data against the revision 1 schema, which refuses a field it does not name, validates
-  against this one.
-- Revision 2 carries images as well: a server may put `image` in a run configuration's
-  policy only for a runner that announced 2. `dev.qory.run.started` carries
-  `image_name`, `container_runtime` and `docker`, and `dev.qory.run.policy_applied`
-  carries `image`, when they apply.
+- The contract stays `v1` revision 1, amended in place again before any server relied
+  on it, and the runner sends `X-Qory-Contract-Version: 1` and `contract_version: 1` in
+  the ping as before: tools and images are added to revision 1. A server may put `tools`
+  and `image` in a run configuration's policy; a runner before 0.6.0 refuses such a
+  policy, and its run does not start. `dev.qory.run.egress` carries three fields it did
+  not, `tool`, `request_id` and `status`; `dev.qory.run.started` carries `image_name`,
+  `container_runtime` and `docker`, and `dev.qory.run.policy_applied` carries `tools`
+  and `image`, when they apply. A receiver that validates event data against the 0.5
+  schemas, which refuse a field they do not name, validates against these.
 - `wall.Request` has `Runtime` and `Docker`, and `wall.Docker` has `NestArgs`: a caller
   that builds a request of its own, or an adapter of its own, reads them. A caller that
   gives an image with a Docker of the agent's own gives its helper a mode that calls
