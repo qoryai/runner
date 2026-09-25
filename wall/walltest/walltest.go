@@ -263,7 +263,7 @@ func Run(t *testing.T, o Options) {
 	check("no way to the engine's host by the network's first address", len(p.HostByGateway) == 0, p.HostByGateway)
 	check("the record is read-only", p.RecordWrite != "", "the probe opened events.jsonl for writing")
 	check("not root", p.UID != 0 && p.GID != 0, fmt.Sprintf("uid %d gid %d", p.UID, p.GID))
-	check("no capabilities and none to gain", zero(p.CapEff) && zero(p.CapPrm) && zero(p.CapBnd) && p.NoNewPrivs == "1", fmt.Sprintf("CapEff %s CapPrm %s CapBnd %s NoNewPrivs %s", p.CapEff, p.CapPrm, p.CapBnd, p.NoNewPrivs))
+	check("no capabilities and none to gain", zero(p.CapEff) && zero(p.CapPrm) && zero(p.CapBnd) && zero(p.CapInh) && zero(p.CapAmb) && p.NoNewPrivs == "1", fmt.Sprintf("CapEff %s CapPrm %s CapBnd %s CapInh %s CapAmb %s NoNewPrivs %s", p.CapEff, p.CapPrm, p.CapBnd, p.CapInh, p.CapAmb, p.NoNewPrivs))
 	if !o.Docker {
 		check("no container runtime socket", len(p.Sockets) == 0, p.Sockets)
 	} else {

@@ -44,6 +44,8 @@ type report struct {
 	CapEff         string            `json:"cap_eff"`
 	CapPrm         string            `json:"cap_prm"`
 	CapBnd         string            `json:"cap_bnd"`
+	CapInh         string            `json:"cap_inh"`
+	CapAmb         string            `json:"cap_amb"`
 	NoNewPrivs     string            `json:"no_new_privs"`
 	Sockets        []string          `json:"sockets"`
 	HostEnv        bool              `json:"host_env"`
@@ -150,6 +152,10 @@ func probe(args []string) int {
 				r.CapPrm = value
 			case "CapBnd":
 				r.CapBnd = value
+			case "CapInh":
+				r.CapInh = value
+			case "CapAmb":
+				r.CapAmb = value
 			case "NoNewPrivs":
 				r.NoNewPrivs = value
 			}
