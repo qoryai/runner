@@ -41,6 +41,8 @@ const nestWait = 2 * 60
 //
 // Its arguments are --user, uid:gid or a name of the image's, then -- and the launch.
 // The caller's binary runs it in a hidden mode, as it runs [Relay].
+//
+// Experimental: see contracts/runner/v1/README.md §The wall.
 func Nest(args []string) error {
 	user, argv, err := parseNest(args)
 	if err != nil {

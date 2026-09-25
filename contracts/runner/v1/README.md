@@ -31,7 +31,7 @@ is `v2`. What each revision added:
 | Revision | Runner | Adds |
 |---|---|---|
 | 1 | 0.4.0 | the server (§The server): discovery, signed requests, the run configuration fetched with the run's labels as its query, the digests and the reload |
-| 2 | 0.6.0 | tools (§Tools): `tools` in the policy and in `dev.qory.run.policy_applied`, and `tool`, `request_id` and `status` in `dev.qory.run.egress`. Images (§Images): `image` in the policy and in `dev.qory.run.policy_applied`, and `image_name`, `container_runtime` and `docker` in `dev.qory.run.started`. A server sends a run configuration that selects tools or an image only to a runner that announced revision 2 or later; an earlier runner refuses the policy, and the run does not start |
+| 2 | 0.6.0 | tools (§Tools): `tools` in the policy and in `dev.qory.run.policy_applied`, and `tool`, `request_id` and `status` in `dev.qory.run.egress`. Images (§Images): `image` in the policy and in `dev.qory.run.policy_applied`, and `image_name`, `container_runtime` and `docker` in `dev.qory.run.started`; `container_runtime` and `docker` belong to an option that is experimental (§The wall). A server sends a run configuration that selects tools or an image only to a runner that announced revision 2 or later; an earlier runner refuses the policy, and the run does not start |
 
 Revision 1 was amended in place in 0.5.0, before any server relied on it: the run
 configuration request carries every label of the run, where 0.4 sent `forge` and
@@ -919,7 +919,7 @@ default. Images need a wall: without one the runtime is the machine's own proces
 | name | what a policy, or the machine's default, selects it by, in a credential's grammar |
 | reference | the image, pinned by digest where the machine wants the same image every time |
 | runtime | the container runtime the wall starts it under, one the machine's engine has: `sysbox-runc`. Absent is the engine's default |
-| docker | the agent gets a Docker daemon of its own inside the enclosure (§The wall). It needs a runtime that runs one without privileges |
+| docker | the agent gets a Docker daemon of its own inside the enclosure (§The wall). It needs a runtime that runs one without privileges. Experimental |
 
 ```yaml
 version: 1
@@ -1030,7 +1030,13 @@ host's. It forwards no packet between its two networks: IP forwarding is off in 
 namespace, so what it passes on is the connections it copies and nothing routed
 through it.
 
-**A Docker of the agent's own.** An image the machine defines with a daemon (§Images)
+**A Docker of the agent's own.** *Experimental.* Under the nested runtime the enclosure
+has a root, and whether that root reaches the mounts the run lists as the machine's root
+has not been verified; until it is, the option is experimental: it may change or be
+withdrawn in a minor release, and a run that uses it mounts nothing the machine's root
+must protect.
+
+An image the machine defines with a daemon (§Images)
 gives the agent a Docker daemon inside the enclosure, never the machine's. It needs a
 runtime that runs a daemon in a container without privileges: `sysbox-runc`, whose
 container has a root of its own, in a user namespace, mapped to a user of the machine's
@@ -1079,9 +1085,11 @@ files and need neither.
 engine that command reaches. It is supported where the suite passes. An engine in a
 virtual machine on a Mac is where a wall is developed, not a target: the suite passes
 there without the hook check (§Limits). The agent's image is the caller's; the wall
-builds none. A Docker of the agent's own ships under `sysbox-runc`, where the suite
-passes with it: the runner's CI installs Sysbox on a Linux machine and runs the suite in
-an enclosure with a daemon.
+builds none. A Docker of the agent's own is experimental, under `sysbox-runc`, where the
+suite passes with it: the runner's CI installs Sysbox on a Linux machine and runs the
+suite in an enclosure with a daemon. The suite checks the list as the agent's user; what
+the enclosure's root reaches of the mounts the run lists is the open question that keeps
+the option experimental.
 
 ## Fixtures
 

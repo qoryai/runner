@@ -261,7 +261,7 @@ type Image struct {
 	Runtime string
 	// Docker gives the agent a Docker daemon of its own, inside the enclosure: the
 	// image holds dockerd, and the wall starts it before the agent. It needs a Runtime
-	// that runs a daemon in a container without privileges.
+	// that runs a daemon in a container without privileges. Experimental: see contracts/runner/v1/README.md §The wall.
 	Docker bool
 }
 

@@ -36,7 +36,9 @@ release may change what an existing document does, and says so under Upgrading.
   run; a reload that selects another image is refused, where another image is the one
   the selection resolves to, so naming the machine's default, or no longer naming it, is
   no change.
-- A Docker of the agent's own: an image with `Docker` starts under its `Runtime`,
+- A Docker of the agent's own, experimental because whether the enclosure's root reaches
+  the mounts the run lists as the machine's root has not been verified: it may change or
+  be withdrawn in a minor release. An image with `Docker` starts under its `Runtime`,
   `sysbox-runc`, whose root is a user of the machine's that is not root. The enclosure
   starts as that root, with `no-new-privileges` and a volume of the run's for the
   daemon's store; `wall.Nest`, the helper in a hidden mode, starts `dockerd` on its Unix

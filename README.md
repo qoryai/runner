@@ -142,7 +142,11 @@ the enclosure's root is then a user of the machine's that is not root, and the a
 not root. `wall.Nest` refuses a runtime that maps the enclosure's root to the machine's,
 and looks for `dockerd` in the image's system directories, never on the run's `PATH`.
 The daemon's store has no size limit of the run's, a daemon that exits during the run
-is not started again, and the relay forwards no packet between its networks. What every wall guarantees, what
+is not started again, and the relay forwards no packet between its networks. A Docker of
+the agent's own is experimental: whether the enclosure's root reaches the mounts the run
+lists as the machine's root has not been verified, so the option may change or be
+withdrawn in a minor release, and a run that uses it mounts nothing the machine's root
+must protect. What every wall guarantees, what
 crosses it and its limits are the contract's [wall section](contracts/runner/v1/README.md#the-wall),
 and the [`wall/walltest`](wall/walltest/walltest.go) suite checks the list from inside
 the enclosure. `Events` is any stream: a run with no receiver is followed on standard
@@ -169,7 +173,7 @@ run behind a wall, and reports what happened. It is two halves, and one of them 
 
 | Half | What it does | State |
 |---|---|---|
-| **The wall** | starts the agent in a container with no route out except to the session runner's proxy; the policy, the record and the server's secret stay on the node | ships since 0.2.0, as `qory run --wall docker`; since 0.3.0 it holds a run's credentials outside the container and holds a host to paths; since 0.6.0 it starts a run's tools outside the container and hands them the requests to the hosts they serve, starts a run in the image of the machine's its policy selects, and gives an agent a Docker daemon of its own inside the container under `sysbox-runc` |
+| **The wall** | starts the agent in a container with no route out except to the session runner's proxy; the policy, the record and the server's secret stay on the node | ships since 0.2.0, as `qory run --wall docker`; since 0.3.0 it holds a run's credentials outside the container and holds a host to paths; since 0.6.0 it starts a run's tools outside the container and hands them the requests to the hosts they serve, starts a run in the image of the machine's its policy selects, and, experimental, gives an agent a Docker daemon of its own inside the container under `sysbox-runc` |
 | **The fleet layer** | registers the node with a control plane, heartbeats and claims work | not built; no command starts it, and nothing here describes it as if one did. The run's policy from the control plane ships since 0.4.0, as the server's run configuration |
 
 So today a node is a machine with Docker on which `qory run --wall docker` is started,
@@ -299,7 +303,7 @@ wall:
 | `contracts/` | the Go package that embeds the contract and validates every fixture |
 | `session/` | the session runner: `session.Run` takes a launch spec, with the policy, the server and the wall as values, and returns the exit status; `session.Forward` is the hook forwarder behind it |
 | `runtimes/` | the runtime: `runtimes.Runtime`, the interface between the runner and the program it runs, how a launch is prepared, what the program's records mean, how it is asked to leave. `Described` is a runtime written as a descriptor, `Bare` a program the runner runs and does not read, `runtimes/claude` Claude Code, `runtimes/catalog` a name resolved to one, and `runtimes/runtimetest` the conformance suite every runtime passes |
-| `wall/` | the wall: the adapter interface, the Docker adapter, `wall.Relay`, the one peer an enclosure reaches, and `wall.Nest`, which starts a Docker of the agent's own inside it. `wall/walltest` is the conformance suite every adapter passes before it ships |
+| `wall/` | the wall: the adapter interface, the Docker adapter, `wall.Relay`, the one peer an enclosure reaches, and `wall.Nest`, which starts a Docker of the agent's own inside it, experimental. `wall/walltest` is the conformance suite every adapter passes before it ships |
 | `receiver/` | a server of the contract that is not a control plane: the handler the tests run the runner against, tested against the signed fixtures, a worked example of the contract's receiving rules |
 | `internal/` | what the layers share: `policy`, `proxy`, `credential`, `tool`, `event`, `sink`, `server`, `descriptor`, `socket`, `chunk` |
 | `node/` | the node runner's fleet layer, not built yet: it will register, heartbeat, take a dispatched task, hold the run's credentials and start a session through `session`, behind a wall ([§The node runner](#the-node-runner)) |

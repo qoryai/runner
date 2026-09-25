@@ -47,7 +47,7 @@ type Request struct {
 	// holds dockerd; the wall starts it as the enclosure's root, on a Unix socket alone,
 	// and the agent as its user in the socket's group. It needs a Runtime that runs a
 	// daemon in a container without privileges, whose root is a user of the machine's
-	// that is not root.
+	// that is not root. Experimental: see contracts/runner/v1/README.md §The wall.
 	Docker bool
 }
 
