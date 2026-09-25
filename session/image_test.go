@@ -176,3 +176,29 @@ func TestAReloadKeepsTheRunsImage(t *testing.T) {
 		t.Errorf("the second policy_applied %v", then)
 	}
 }
+
+// TestAReloadComparesTheImageItResolvesTo pins that a reload is refused for another
+// image, not for another way of naming the same: naming the machine's default, or no
+// longer naming it, takes effect.
+func TestAReloadComparesTheImageItResolvesTo(t *testing.T) {
+	c := newControl(t)
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]}}`, digest('1'))
+	w := &openWall{}
+	sp := spec(t, nil, "FAKE_EXIT=0")
+	sp.Server = c.server()
+	sp.Wall, sp.Image, sp.Images = w, "base", images
+	run := startWaiting(t, sp)
+	waitFor(t, func() bool { return run.applied() == 1 })
+
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"image":"base"}`, digest('2'))
+	waitFor(t, func() bool { return run.applied() == 2 })
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example","git.example.com"]}}`, digest('3'))
+	waitFor(t, func() bool { return run.applied() == 3 })
+	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.model.example"]},"image":"with-docker"}`, digest('4'))
+	waitFor(t, func() bool { return run.reported("another image than the run started in") })
+
+	pa := ofType(run.finish(), "dev.qory.run.policy_applied")
+	if len(pa) != 3 || data(pa[1])["image"] != "base" || data(pa[2])["image"] != nil {
+		t.Errorf("the policies applied: %v", pa)
+	}
+}

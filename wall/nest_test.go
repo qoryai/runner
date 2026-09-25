@@ -3,6 +3,8 @@ package wall
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -102,5 +104,58 @@ func TestNestGivesTheInnerContainersTheProxyByAddress(t *testing.T) {
 	}
 	if _, err := nestProxies(env(map[string]string{"HTTPS_PROXY": "::"}), resolve); err == nil {
 		t.Error("a proxy that is not a URL was written")
+	}
+}
+
+// TestNestNeedsAUserNamespace pins that a Docker of the agent's own starts only where
+// the enclosure's root is not the machine's: a map that says otherwise, or cannot be
+// read, is refused.
+func TestNestNeedsAUserNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		uidMap string
+		ok     bool
+	}{
+		{"         0     100000      65536\n", true},
+		{"0 100000 65536\n65536 200000 1000\n", true},
+		{"         0          0 4294967295\n", false},
+		{"1000 1000 1\n", false},
+		{"", false},
+		{"not a map", false},
+		{"0 100000 0", false},
+	} {
+		if err := userNamespaced(tc.uidMap); (err == nil) != tc.ok {
+			t.Errorf("%q: %v, want accepted %v", tc.uidMap, err, tc.ok)
+		}
+	}
+}
+
+// TestNestFindsTheDaemonInTheSystemDirectories pins that dockerd is looked for in the
+// directories given, in order, and only as an executable file.
+func TestNestFindsTheDaemonInTheSystemDirectories(t *testing.T) {
+	first, second, empty := t.TempDir(), t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(first, "dockerd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "dockerd"), []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := findDaemon([]string{empty, first, second}); err == nil {
+		t.Error("a directory, or a file that is not executable, is taken for the daemon")
+	}
+	if err := os.Chmod(filepath.Join(second, "dockerd"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	third := t.TempDir()
+	if err := os.WriteFile(filepath.Join(third, "dockerd"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := findDaemon([]string{empty, first, second, third}); err != nil || got != filepath.Join(second, "dockerd") {
+		t.Errorf("found %q, %v; want the first executable, in %s", got, err, second)
+	}
+	for i, d := range []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"} {
+		if daemonDirs[i] != d {
+			t.Errorf("the daemon is looked for in %v", daemonDirs)
+			break
+		}
 	}
 }

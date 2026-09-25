@@ -305,6 +305,9 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		create = append(create, "--add-host", hostName+":host-gateway")
 	}
 	create = append(create, e.hardening()...)
+	// The relay is on both networks, so it forwards no packet between them: what it
+	// passes on is the connections it copies to the proxy, and nothing routed through it.
+	create = append(create, "--sysctl", "net.ipv4.ip_forward=0", "--sysctl", "net.ipv6.conf.all.forwarding=0")
 	create = append(create, "--env-file", relayEnvFile, "--read-only", "--mount", helper, "--entrypoint", HelperPath, e.req.Image)
 	create = append(create, e.d.RelayArgs...)
 	create = append(create, fmt.Sprintf("%d=%s", relayPort, net.JoinHostPort(e.host, port)))

@@ -57,6 +57,46 @@ func parseNest(args []string) (string, []string, error) {
 	return args[1], args[3:], nil
 }
 
+// userNamespaced reports whether a uid_map, /proc/self/uid_map's content, maps the
+// enclosure's root to a user of the machine's that is not root: the one thing that makes
+// a root inside it no root outside. A map that cannot be read is no such map.
+func userNamespaced(uidMap string) error {
+	for _, line := range strings.Split(strings.TrimSpace(uidMap), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			return fmt.Errorf("nest: the user map %q cannot be read", strings.TrimSpace(uidMap))
+		}
+		inside, err1 := strconv.ParseUint(f[0], 10, 32)
+		outside, err2 := strconv.ParseUint(f[1], 10, 32)
+		count, err3 := strconv.ParseUint(f[2], 10, 32)
+		if err1 != nil || err2 != nil || err3 != nil || count == 0 {
+			return fmt.Errorf("nest: the user map %q cannot be read", strings.TrimSpace(uidMap))
+		}
+		if inside == 0 {
+			if outside == 0 {
+				return errors.New("nest: the enclosure's root is the machine's root; a Docker of the agent's own needs a runtime that maps it to a user of the machine's that is not root, sysbox-runc say")
+			}
+			return nil
+		}
+	}
+	return errors.New("nest: the user map does not map the enclosure's root")
+}
+
+// daemonDirs are where [Nest] looks for dockerd: the image's system directories, never
+// the run's PATH, which may name a directory of the workspace.
+var daemonDirs = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
+
+// findDaemon is the first executable dockerd in dirs.
+func findDaemon(dirs []string) (string, error) {
+	for _, d := range dirs {
+		p := filepath.Join(d, "dockerd")
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			return p, nil
+		}
+	}
+	return "", errors.New("nest: the image holds no dockerd in " + strings.Join(dirs, ", ") + "; an image with a Docker of the agent's own carries the daemon")
+}
+
 // nestIDs are the agent's user and group, from uid:gid, or from the image's own users
 // and groups when named. A user named by number alone must be one of the image's, for
 // its group: the daemon's socket is given to that group.

@@ -951,7 +951,9 @@ carries `image` when the policy selects one.
   certificate goes after them (§The wall);
 - with the runtime at the path the launch names;
 - with no setuid program or capability needed for its work;
-- for a Docker of the agent's own, with `dockerd` on its `PATH`, and the users and
+- for a Docker of the agent's own, with `dockerd` in `/usr/local/sbin`, `/usr/local/bin`,
+  `/usr/sbin`, `/usr/bin`, `/sbin` or `/bin`, never looked for on the run's `PATH`, and
+  the users and
   groups it is told by name in its own `/etc/passwd` and `/etc/group`.
 
 ## The wall
@@ -1024,20 +1026,30 @@ copying every byte to one address fixed when it starts, the proxy's. It reads no
 decides nothing and takes no instruction from the agent; the policy stays in the session
 runner. It exists because the host is not always where a container thinks it is: with
 the engine in a virtual machine the network's gateway is the virtual machine's, not the
-host's.
+host's. It forwards no packet between its two networks: IP forwarding is off in its
+namespace, so what it passes on is the connections it copies and nothing routed
+through it.
 
 **A Docker of the agent's own.** An image the machine defines with a daemon (§Images)
 gives the agent a Docker daemon inside the enclosure, never the machine's. It needs a
 runtime that runs a daemon in a container without privileges: `sysbox-runc`, whose
 container has a root of its own, in a user namespace, mapped to a user of the machine's
-that is not root. The enclosure starts as that root, with no privileged mode, no added
-capability and `no-new-privileges`, and the wall's helper, not the image, starts it:
+that is not root. The helper refuses to start the daemon where the enclosure's root is
+the machine's, which `/proc/self/uid_map` says, so a runtime without a user namespace
+is no run. The enclosure starts as that root, with no privileged mode and
+`no-new-privileges`, and with the whole set of capabilities the runtime gives it inside
+its user namespace, which the daemon needs; the wall's helper, not the image, starts it:
 `dockerd` on its Unix socket alone, never a port of the enclosure's network, the socket
 in the agent's group, the daemon's output in a file of its own; then, once the daemon
-answers, it drops every capability, the bounding set included, and becomes the agent's
-user. The daemon's store is a volume of the run's, removed with the enclosure. Two
-guarantees read differently under it, and every other stands as written:
+answers, it drops every capability, the bounding set included, becomes the agent's
+user, and clears the inheritable and ambient sets. The daemon's store is a volume of the
+run's, removed with the enclosure, with no size limit of the run's: the run's limits do
+not bound it. A daemon that exits during the run is not started again, and its output
+is root's inside the enclosure, not the agent's to read. Three guarantees read
+differently under it, and every other stands as written:
 
+- *no added capabilities*: the agent has none, and none to gain. The enclosure's root has
+  every capability inside its user namespace, and nothing of the machine's;
 - *not root*: the agent runs as a user that is not root. The enclosure has a root, a
   user of the machine's that is not root, and whoever reaches the daemon's socket is
   that root, inside the enclosure and nowhere else;

@@ -552,7 +552,15 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			if !sameTools(in.Policy.Tools, pol.Policy.Tools) {
 				return errors.New("the run configuration selects other tools than the run started with; a run's tools are fixed when it starts")
 			}
-			if in.Policy.Image != pol.Policy.Image {
+			// The image compared is the one the selection resolves to, so naming the
+			// machine's default, or no longer naming it, is no change.
+			if spec.Wall == nil {
+				if in.Policy.Image != "" {
+					return fmt.Errorf("the run configuration selects the image %q, which needs a wall", in.Policy.Image)
+				}
+			} else if next, err := image(spec, in.Policy.Image); err != nil {
+				return err
+			} else if next != img {
 				return errors.New("the run configuration selects another image than the run started in; a run's image is fixed when it starts")
 			}
 			if !px.Terminates() {

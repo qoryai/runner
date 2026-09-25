@@ -139,7 +139,10 @@ by name with `image`, as it selects credentials and tools; without a selection t
 starts in `Image`. An image with `Docker` gets a daemon of its own inside the enclosure,
 never the machine's, under a runtime that runs one without privileges, `sysbox-runc`;
 the enclosure's root is then a user of the machine's that is not root, and the agent is
-not root. What every wall guarantees, what
+not root. `wall.Nest` refuses a runtime that maps the enclosure's root to the machine's,
+and looks for `dockerd` in the image's system directories, never on the run's `PATH`.
+The daemon's store has no size limit of the run's, a daemon that exits during the run
+is not started again, and the relay forwards no packet between its networks. What every wall guarantees, what
 crosses it and its limits are the contract's [wall section](contracts/runner/v1/README.md#the-wall),
 and the [`wall/walltest`](wall/walltest/walltest.go) suite checks the list from inside
 the enclosure. `Events` is any stream: a run with no receiver is followed on standard

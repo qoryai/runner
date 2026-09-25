@@ -20,6 +20,13 @@ import (
 
 // nest starts the daemon and becomes the agent: see [Nest].
 func nest(user string, argv []string) error {
+	uidMap, err := os.ReadFile("/proc/self/uid_map")
+	if err != nil {
+		return fmt.Errorf("nest: %w", err)
+	}
+	if err := userNamespaced(string(uidMap)); err != nil {
+		return err
+	}
 	if os.Getuid() != 0 {
 		return fmt.Errorf("nest: the enclosure starts as uid %d, not as its root; the wall starts it as 0:0 under a runtime that maps it to a user of the machine's", os.Getuid())
 	}
@@ -27,9 +34,9 @@ func nest(user string, argv []string) error {
 	if err != nil {
 		return err
 	}
-	dockerd, err := exec.LookPath("dockerd")
+	dockerd, err := findDaemon(daemonDirs)
 	if err != nil {
-		return errors.New("nest: the image holds no dockerd; an image with a Docker of the agent's own carries the daemon")
+		return err
 	}
 	command, err := exec.LookPath(argv[0])
 	if err != nil {
@@ -72,7 +79,8 @@ func nest(user string, argv []string) error {
 	}
 
 	// Capabilities belong to a thread: the bounding set is dropped on the thread that
-	// executes the launch. Changing the user drops the rest, on every thread.
+	// executes the launch. Changing the user drops the permitted and effective sets, on
+	// every thread; the inheritable and ambient sets are cleared after it.
 	runtime.LockOSThread()
 	last := 63
 	if b, err := os.ReadFile("/proc/sys/kernel/cap_last_cap"); err == nil {
@@ -93,6 +101,16 @@ func nest(user string, argv []string) error {
 	}
 	if err := syscall.Setuid(uid); err != nil {
 		return fmt.Errorf("nest: setuid: %w", err)
+	}
+	// Changing the user clears the permitted, effective and ambient sets, not the
+	// inheritable one: it is cleared here, and the ambient set with it, on the thread
+	// that executes the launch.
+	var none [2]unix.CapUserData
+	if err := unix.Capset(&unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}, &none[0]); err != nil {
+		return fmt.Errorf("nest: clearing the inheritable capabilities: %w", err)
+	}
+	if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0); err != nil && !errors.Is(err, unix.EINVAL) {
+		return fmt.Errorf("nest: clearing the ambient capabilities: %w", err)
 	}
 	return fmt.Errorf("nest: exec %s: %w", command, syscall.Exec(command, argv, env))
 }
