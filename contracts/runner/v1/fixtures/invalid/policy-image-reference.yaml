@@ -1,0 +1,5 @@
+# A policy selects an image by the machine's name for it, never by a reference.
+version: 1
+egress:
+  mode: enforce
+image: registry.example.com/agent:1

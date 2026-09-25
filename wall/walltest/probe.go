@@ -68,6 +68,7 @@ type report struct {
 	ToolAllowedErr string            `json:"tool_allowed_err"`
 	ToolSaw        string            `json:"tool_saw"`
 	ToolDenied     int               `json:"tool_denied"`
+	Nested         *nested           `json:"nested,omitempty"`
 }
 
 // wait is how long an attempt that must fail is given to fail.
@@ -193,6 +194,12 @@ func probe(args []string) int {
 			}
 			r.Hook = hook(args[i+1])
 		}
+	}
+
+	// Last, so what the containers it starts send through the proxy is recorded after
+	// everything else.
+	if os.Getenv("PROBE_DOCKER") == "1" {
+		r.Nested = probeNested()
 	}
 
 	b, _ := json.Marshal(r)

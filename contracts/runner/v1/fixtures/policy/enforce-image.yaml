@@ -1,0 +1,10 @@
+# Start in an image of the machine's, by name: one with the toolchain this repository's
+# agent needs. The machine defines the reference and the runtime; the policy names
+# neither.
+version: 1
+egress:
+  mode: enforce
+  allow:
+    - api.anthropic.com
+    - registry-1.docker.io
+image: with-docker

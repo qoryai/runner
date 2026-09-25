@@ -73,8 +73,13 @@ type Spec struct {
 	// means no wall: the runtime is this machine's process, and enforcement is
 	// cooperative.
 	Wall wall.Wall
-	// Image is the agent's image under a Wall.
+	// Image is the agent's image under a Wall when the policy selects none: the name
+	// of one of Images, or a reference.
 	Image string
+	// Images are the images this machine defines; the run's policy selects among them
+	// by name, as it selects credentials and tools, and a selection needs a Wall. The
+	// image a run starts in is fixed when it starts.
+	Images []Image
 	// Mounts are what the enclosure shows of this machine beside Dir, each at its own
 	// path: the checkout around Dir, a composed home outside it. The runner adds the
 	// run directory, read-only. Without a Wall they mean nothing.
@@ -298,6 +303,17 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 		sinks.Close(ctx)
 		return nil, errors.New("the policy selects credentials or tools or has path rules, which need a wall: without one a program that ignores the proxy is bound by none of them")
 	}
+	if pol.Policy.Image != "" && spec.Wall == nil {
+		sinks.Close(ctx)
+		return nil, fmt.Errorf("the policy selects the image %q, which needs a wall: without one the runtime is this machine's process", pol.Policy.Image)
+	}
+	var img Image
+	if spec.Wall != nil {
+		if img, err = image(spec, pol.Policy.Image); err != nil {
+			sinks.Close(ctx)
+			return nil, err
+		}
+	}
 	defs := make([]credential.Definition, len(spec.Credentials))
 	for i, c := range spec.Credentials {
 		defs[i] = credential.Definition(c)
@@ -348,7 +364,7 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	var enclosure wall.Enclosure
 	bind := spec.ProxyBind
 	if spec.Wall != nil {
-		if enclosure, err = spec.Wall.Prepare(ctx, wall.Request{RunID: runID, Image: spec.Image}); err != nil {
+		if enclosure, err = spec.Wall.Prepare(ctx, wall.Request{RunID: runID, Image: img.Ref, Runtime: img.Runtime, Docker: img.Docker}); err != nil {
 			sinks.Close(ctx)
 			return nil, err
 		}
@@ -458,7 +474,16 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 	}
 	if spec.Wall != nil {
 		started["wall"] = spec.Wall.Name()
-		started["image"] = spec.Image
+		started["image"] = img.Ref
+		if img.Name != "" {
+			started["image_name"] = img.Name
+		}
+		if img.Runtime != "" {
+			started["container_runtime"] = img.Runtime
+		}
+		if img.Docker {
+			started["docker"] = true
+		}
 	}
 	if len(spec.Labels) > 0 {
 		started["labels"] = spec.Labels
@@ -504,6 +529,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			}
 			a["tools"] = used
 		}
+		if pol.Policy.Image != "" {
+			a["image"] = pol.Policy.Image
+		}
 		if hosts := px.Terminated(); len(hosts) > 0 {
 			a["terminated"] = hosts
 		}
@@ -523,6 +551,9 @@ func Run(ctx context.Context, spec Spec) (*Result, error) {
 			in := *next
 			if !sameTools(in.Policy.Tools, pol.Policy.Tools) {
 				return errors.New("the run configuration selects other tools than the run started with; a run's tools are fixed when it starts")
+			}
+			if in.Policy.Image != pol.Policy.Image {
+				return errors.New("the run configuration selects another image than the run started in; a run's image is fixed when it starts")
 			}
 			if !px.Terminates() {
 				if len(in.Policy.Credentials) > 0 {

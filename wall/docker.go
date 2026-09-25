@@ -61,6 +61,10 @@ type Docker struct {
 	// RelayArgs are the arguments that make Helper run [Relay]; the forwards follow
 	// them.
 	RelayArgs []string
+	// NestArgs are the arguments that make Helper run [Nest], for an image with a Docker
+	// of the agent's own; the user and the launch follow them. Without them such an
+	// image is refused.
+	NestArgs []string
 	// CAEnv names the variables that point a program at [BundlePath] when the run has
 	// an authority of its own; nil means [DefaultCAEnv]. A program that reads another
 	// is served by naming it here.
@@ -106,6 +110,7 @@ var imageBundles = []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/
 var (
 	runIDShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 	imageShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
+	runtimeShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 	userShape  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?$`)
 	envShape   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 	cpusShape  = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
@@ -135,7 +140,16 @@ func (d *Docker) Prepare(ctx context.Context, req Request) (Enclosure, error) {
 	if !imageShape.MatchString(req.Image) {
 		return nil, fmt.Errorf("wall docker: %q is not an image reference", req.Image)
 	}
-	if d.Helper == "" || len(d.RelayArgs) == 0 {
+	if req.Runtime != "" && !runtimeShape.MatchString(req.Runtime) {
+		return nil, fmt.Errorf("wall docker: %q is not a container runtime's name", req.Runtime)
+	}
+	if req.Docker && req.Runtime == "" {
+		return nil, errors.New("wall docker: a Docker of the agent's own needs a runtime that runs one without privileges, sysbox-runc say; a privileged container is never an enclosure")
+	}
+	if req.Docker && len(d.NestArgs) == 0 {
+		return nil, errors.New("wall docker: a Docker of the agent's own needs the helper's arguments that start it")
+	}
+		if d.Helper == "" || len(d.RelayArgs) == 0 {
 		return nil, errors.New("wall docker: the helper binary and its relay arguments are required")
 	}
 	if err := sys.checkHelper(d.Helper); err != nil {
@@ -321,7 +335,19 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 		run = append(run, "--tty")
 	}
 	run = append(run, "--name", e.agent(), "--label", e.label(), "--network", e.inside())
-	run = append(run, e.hardening()...)
+	if e.req.Runtime != "" {
+		run = append(run, "--runtime", e.req.Runtime)
+	}
+	if e.req.Docker {
+		// The enclosure starts as its root, a user of the machine's that is not root,
+		// with the capabilities the runtime gives it inside its user namespace: the
+		// daemon needs them. The helper starts the daemon and then the agent as its
+		// user, with none. The daemon's store is a volume of the run's, removed with the
+		// container.
+		run = append(run, "--user", "0:0", "--security-opt", "no-new-privileges", "--init", "--mount", "type=volume,dst="+nestStore)
+	} else {
+		run = append(run, e.hardening()...)
+	}
 	run = append(run, limits...)
 	run = append(run, "--env-file", envFile, "--workdir", l.Dir, "--mount", helper)
 	for _, m := range mounts {
@@ -330,7 +356,13 @@ func (e *dockerEnclosure) Wrap(ctx context.Context, l Launch) (Launch, error) {
 	if bundle != "" {
 		run = append(run, "--mount", bundle)
 	}
-	run = append(run, "--entrypoint", l.Command, e.req.Image)
+	if e.req.Docker {
+		run = append(run, "--entrypoint", HelperPath, e.req.Image)
+		run = append(run, e.d.NestArgs...)
+		run = append(run, "--user", e.user, "--", l.Command)
+	} else {
+		run = append(run, "--entrypoint", l.Command, e.req.Image)
+	}
 	run = append(run, l.Args...)
 	e.made = append(e.made, []string{"rm", "--force", "--volumes", e.agent()})
 	return Launch{Command: e.command(), Args: run, Dir: l.Dir}, nil

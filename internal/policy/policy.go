@@ -40,6 +40,9 @@ type Policy struct {
 	Egress      Egress     `json:"egress"`
 	Credentials []Selected `json:"credentials,omitempty"`
 	Tools       []Selected `json:"tools,omitempty"`
+	// Image is the name of the machine's image the run starts in; empty is the
+	// machine's default.
+	Image string `json:"image,omitempty"`
 }
 
 // Egress is the policy's egress section.

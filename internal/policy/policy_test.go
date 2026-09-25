@@ -197,3 +197,26 @@ func TestEveryFixtureReadsAsAPolicy(t *testing.T) {
 		t.Error("fixtures/run-configuration has no observe-deny.json")
 	}
 }
+
+// TestAPolicySelectsAnImageByName pins that a policy names the machine's image by the
+// machine's name for it and never by a reference, and that the selection is part of
+// what the digest pins.
+func TestAPolicySelectsAnImageByName(t *testing.T) {
+	l, err := policy.Read("enforce-image.yaml", fixture(t, "fixtures/policy/enforce-image.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Policy.Image != "with-docker" {
+		t.Errorf("the image read as %q", l.Policy.Image)
+	}
+	without, err := policy.Read("policy", []byte(`{"version":1,"egress":{"mode":"enforce","allow":["api.anthropic.com","registry-1.docker.io"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without.Policy.Image != "" || without.Digest == l.Digest {
+		t.Errorf("a policy selecting no image read as %q, digest %s against %s", without.Policy.Image, without.Digest, l.Digest)
+	}
+	if _, err := policy.Read("policy", []byte(`{"version":1,"egress":{"mode":"enforce"},"image":"registry.example.com/agent:1"}`)); err == nil {
+		t.Error("a reference was read as an image's name")
+	}
+}

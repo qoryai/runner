@@ -31,12 +31,13 @@ is `v2`. What each revision added:
 | Revision | Runner | Adds |
 |---|---|---|
 | 1 | 0.4.0 | the server (§The server): discovery, signed requests, the run configuration fetched with the run's labels as its query, the digests and the reload |
-| 2 | 0.6.0 | tools (§Tools): `tools` in the policy and in `dev.qory.run.policy_applied`, and `tool`, `request_id` and `status` in `dev.qory.run.egress`. A server sends a run configuration that selects tools only to a runner that announced revision 2 or later; an earlier runner refuses the policy, and the run does not start |
+| 2 | 0.6.0 | tools (§Tools): `tools` in the policy and in `dev.qory.run.policy_applied`, and `tool`, `request_id` and `status` in `dev.qory.run.egress`. Images (§Images): `image` in the policy and in `dev.qory.run.policy_applied`, and `image_name`, `container_runtime` and `docker` in `dev.qory.run.started`. A server sends a run configuration that selects tools or an image only to a runner that announced revision 2 or later; an earlier runner refuses the policy, and the run does not start |
 
 Revision 1 was amended in place in 0.5.0, before any server relied on it: the run
 configuration request carries every label of the run, where 0.4 sent `forge` and
 `repository` alone. It was amended in place again in 0.5.1: every event type starts
-`dev.qory.`, where 0.4 and 0.5.0 sent `ai.qory.`.
+`dev.qory.`, where 0.4 and 0.5.0 sent `ai.qory.`. Revision 2 gained images before its
+first release, 0.6.0, so a runner that announces 2 reads both.
 
 `v1` is the first generation of this namespace, not a stability promise. The runner
 module is at `v0`, which under Go's rules promises no compatibility, and until it
@@ -222,7 +223,8 @@ run directory, read-only, and starts the command the wall returns, on the same p
 pipes; the proxy and socket variables inside name the addresses the enclosure reaches
 them on. After step 9 it closes the wall, which removes everything it created, and stops
 the tools.
-`dev.qory.run.started` carries `wall` and `image`.
+`dev.qory.run.started` carries `wall` and `image`, and `image_name`, `container_runtime`
+and `docker` when the image is one the machine defines (§Images).
 
 Under a node runner, step 1 is the node runner handing the same spec down through the
 environment, with the run id it already holds; everything after is one code path.
@@ -256,6 +258,7 @@ egress:
 | `egress.paths` | by host, in `allow`'s grammar, the paths the session may ask of it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. An empty list is no path at all |
 | `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say. A policy defines none (§Credentials) |
 | `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one. A policy defines none (§Tools). Revision 2 |
+| `image` | the image of the machine's the run starts in, by the machine's name for it; absent is the machine's default. A policy names no reference and defines no image (§Images). Revision 2 |
 
 **The harness's declared hosts.** The harness compose reports the hosts its modules
 declared, the command hands that list to the runner, and `dev.qory.run.policy_applied`
@@ -500,8 +503,8 @@ The types, one namespace. The runner's own:
 | Type | When | Data |
 |---|---|---|
 | `dev.qory.ping` | before the runtime starts, to the server's events endpoint only, when a server is configured | `runner_version`, `events`, `contract_version` |
-| `dev.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and `labels` when the caller gave any |
-| `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration took effect | `mode`, `allow`, `deny`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `tools`, `terminated` |
+| `dev.qory.run.started` | the runtime is about to start; the first event in the file | `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `runner_version`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition says so `image_name`, `container_runtime` and `docker`, and `labels` when the caller gave any |
+| `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration took effect | `mode`, `allow`, `deny`, `source`, and with them set `url`, `digest`, `run_configuration`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
 | `dev.qory.run.resized` | the pseudo-terminal was resized, at the sequence where the new size took effect; never on pipes | `cols`, `rows` |
 | `dev.qory.run.egress` | one per connection through the proxy, allowed or denied; on a terminated host one per request, and on a host a tool serves one per tool invocation | `host`, `port`, `method`, `decision`, `outcome`, `mode`, `rule`, and per request `request_id`, `status`, `request_method`, `path`, `path_rule`, `credential`, `tool` |
@@ -903,6 +906,54 @@ hook is one such client; a harness that wants to report something of its own wri
 same shape with `source: hooks`. Nothing on the socket reaches a receiver except through
 the descriptor's rules. The socket is removed when the run ends.
 
+## Images
+
+The agent's image is the machine's to choose, and a run's to select among. The machine
+defines images by name, and a run's policy selects one by that name, as it selects
+credentials and tools; it names no reference and defines no image, so a repository never
+chooses what it runs under. A run whose policy selects none starts in the machine's
+default. Images need a wall: without one the runtime is the machine's own process.
+
+| Definition | Meaning |
+|---|---|
+| name | what a policy, or the machine's default, selects it by, in a credential's grammar |
+| reference | the image, pinned by digest where the machine wants the same image every time |
+| runtime | the container runtime the wall starts it under, one the machine's engine has: `sysbox-runc`. Absent is the engine's default |
+| docker | the agent gets a Docker daemon of its own inside the enclosure (§The wall). It needs a runtime that runs one without privileges |
+
+```yaml
+version: 1
+egress:
+  mode: enforce
+  allow: [api.anthropic.com, registry-1.docker.io]
+image: with-docker
+```
+
+The machine's default is the name of one of its images, or a reference, which starts
+under the engine's default runtime with no daemon. A name the machine defines is read
+as that image first.
+
+**What cannot hold** is no run: a name the machine does not define, a selection without
+a wall, an image defined twice, a daemon without a runtime. The image a run starts in is
+fixed when it starts: a run configuration that selects another is refused, and the
+policy in force stays.
+
+**The record.** `dev.qory.run.started` carries `image`, the reference, and when the image
+is one the machine defines `image_name`, `container_runtime` when it names one, and
+`docker: true` when the enclosure has a daemon of its own. `dev.qory.run.policy_applied`
+carries `image` when the policy selects one.
+
+**What an image provides.** The wall builds no image and changes none. An image runs:
+
+- under any user id the machine gives it, with no home of its own: `HOME` points at a
+  writable place;
+- with its authorities in a bundle where the wall looks for one, so the run's
+  certificate goes after them (§The wall);
+- with the runtime at the path the launch names;
+- with no setuid program or capability needed for its work;
+- for a Docker of the agent's own, with `dockerd` on its `PATH`, and the users and
+  groups it is told by name in its own `/etc/passwd` and `/etc/group`.
+
 ## The wall
 
 A wall is what makes a connection around the proxy fail. It is optional: with none, the
@@ -975,6 +1026,37 @@ runner. It exists because the host is not always where a container thinks it is:
 the engine in a virtual machine the network's gateway is the virtual machine's, not the
 host's.
 
+**A Docker of the agent's own.** An image the machine defines with a daemon (§Images)
+gives the agent a Docker daemon inside the enclosure, never the machine's. It needs a
+runtime that runs a daemon in a container without privileges: `sysbox-runc`, whose
+container has a root of its own, in a user namespace, mapped to a user of the machine's
+that is not root. The enclosure starts as that root, with no privileged mode, no added
+capability and `no-new-privileges`, and the wall's helper, not the image, starts it:
+`dockerd` on its Unix socket alone, never a port of the enclosure's network, the socket
+in the agent's group, the daemon's output in a file of its own; then, once the daemon
+answers, it drops every capability, the bounding set included, and becomes the agent's
+user. The daemon's store is a volume of the run's, removed with the enclosure. Two
+guarantees read differently under it, and every other stands as written:
+
+- *not root*: the agent runs as a user that is not root. The enclosure has a root, a
+  user of the machine's that is not root, and whoever reaches the daemon's socket is
+  that root, inside the enclosure and nowhere else;
+- *no file of the host beyond the mounts the run lists*: beyond those, and the
+  runtime's own. Sysbox adds the machine's kernel modules, read-only, and scratch
+  directories of its own, and shows emulated parts of `/proc` and `/sys`;
+  `/proc/partitions` names the machine's disks, none of which opens.
+
+The containers the agent starts are inside the enclosure's network namespace, a
+container on the host's network or a privileged one included, so they reach the relay
+and nothing else, and what they reach is decided and recorded as the agent's own
+traffic. The daemon pulls through the proxy, so a registry is a host the policy allows.
+Those containers do not resolve the relay's name: the agent's docker configuration,
+`DOCKER_CONFIG` at `/run/qory/docker` unless the run names one, gives them the proxy by
+its address. They do not get the run's bundle unless the agent mounts it into them, and
+they inherit `no-new-privileges`, so a setuid program in them gains nothing. Docker in
+Docker with `--privileged`, and the machine's own socket, stay refused. gVisor does not
+keep the list: its daemon inside starts only with every capability added.
+
 **One conformance suite**, the `wall/walltest` package, checks the list from inside the
 enclosure with a real session behind the adapter, and an adapter ships when the suite
 passes for it. The suite needs Linux and the tool, so it runs in the runner's CI on a
@@ -985,7 +1067,9 @@ files and need neither.
 engine that command reaches. It is supported where the suite passes. An engine in a
 virtual machine on a Mac is where a wall is developed, not a target: the suite passes
 there without the hook check (§Limits). The agent's image is the caller's; the wall
-builds none.
+builds none. A Docker of the agent's own ships under `sysbox-runc`, where the suite
+passes with it: the runner's CI installs Sysbox on a Linux machine and runs the suite in
+an enclosure with a daemon.
 
 ## Fixtures
 

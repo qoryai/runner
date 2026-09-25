@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/policy.schema.json",
   "title": "Run policy",
-  "description": "The document that narrows what one run may do. Read once from a file outside the checkout, or later carried in a run start answer, and pinned for the run. It can only tighten what the runner binary allows; it never grants: a credential it selects is one the machine defines, and it defines none.",
+  "description": "The document that narrows what one run may do. Read once from a file outside the checkout, or later carried in a run start answer, and pinned for the run. It can only tighten what the runner binary allows; it never grants: a credential, a tool or an image it selects is one the machine defines, and it defines none.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "egress"],
@@ -78,6 +78,11 @@
           "argument": {"description": "What the run asks the tool for, a repository or a prefix say, given to the definition's command as one argument. The definition says what an argument may look like; one it does not provide for is no run.", "type": "string", "minLength": 1, "maxLength": 256}
         }
       }
+    },
+    "image": {
+      "description": "The image of the machine's the run starts in, by name, behind a wall. The machine defines its images, a reference and the runtime the wall starts it under; the policy selects one and names no reference. Absent means the machine's default. A name the machine does not define is no run, and the image is fixed when the run starts. Added in revision 2.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
     }
   },
   "$defs": {

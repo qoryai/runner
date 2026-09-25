@@ -15,8 +15,37 @@ release may change what an existing document does, and says so under Upgrading.
   fields it did not, `tool`, `request_id` and `status`; a receiver that validates event
   data against the revision 1 schema, which refuses a field it does not name, validates
   against this one.
+- Revision 2 carries images as well: a server may put `image` in a run configuration's
+  policy only for a runner that announced 2. `dev.qory.run.started` carries
+  `image_name`, `container_runtime` and `docker`, and `dev.qory.run.policy_applied`
+  carries `image`, when they apply.
+- `wall.Request` has `Runtime` and `Docker`, and `wall.Docker` has `NestArgs`: a caller
+  that builds a request of its own, or an adapter of its own, reads them. A caller that
+  gives an image with a Docker of the agent's own gives its helper a mode that calls
+  `wall.Nest`, as it gives one that calls `wall.Relay`.
+- `golang.org/x/sys` is a direct dependency.
 
 ### Added
+
+- Images: `session.Spec.Images` defines the images of the machine's, a name, a
+  reference, the container runtime the wall starts it under and whether the agent gets a
+  Docker daemon of its own, and a policy's `image` selects one by name, as it selects
+  credentials and tools. `Spec.Image` is the default when the policy selects none: the
+  name of one of `Images`, or a reference. A name the machine does not define, a
+  selection without a wall, an image defined twice and a daemon without a runtime are no
+  run; a reload that selects another image is refused.
+- A Docker of the agent's own: an image with `Docker` starts under its `Runtime`,
+  `sysbox-runc`, whose root is a user of the machine's that is not root. The enclosure
+  starts as that root, with `no-new-privileges` and a volume of the run's for the
+  daemon's store; `wall.Nest`, the helper in a hidden mode, starts `dockerd` on its Unix
+  socket alone with the socket in the agent's group, waits until it answers, gives the
+  agent a docker configuration that hands the containers it starts the proxy by its
+  address, drops every capability, the bounding set included, and executes the launch as
+  the agent's user. Docker in Docker with `--privileged` and the machine's socket stay
+  refused.
+- The wall's conformance suite runs in an enclosure with a Docker of the agent's own,
+  `TestDockerNestedConforms`, where `QORY_WALL_RUNTIME` names the runtime; the CI job
+  installs Sysbox and runs it.
 
 - Tools: programs of the machine's that serve hosts, for what a run reaches that needs
   more than a token in a header. `session.Spec.Tools` defines them, a name, a command

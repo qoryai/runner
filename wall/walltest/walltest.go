@@ -52,10 +52,15 @@ const (
 	modeForward = "forward"
 	modeProbe   = "probe"
 	modeTool    = "tool"
+	modeNest    = "nest"
+	modeInner   = "inner"
 )
 
 // RelayArgs are the arguments that make the helper run the relay.
 var RelayArgs = []string{modeRelay}
+
+// NestArgs are the arguments that make the helper start a Docker of the agent's own.
+var NestArgs = []string{modeNest}
 
 // EnvHelper names a Linux build of the test binary, for a machine that is not Linux.
 const EnvHelper = "QORY_WALL_HELPER"
@@ -88,7 +93,8 @@ const (
 const hostOnly = "QORY_WALLTEST_HOST_ONLY"
 
 // Main makes the test binary the helper when it was started as one: the relay, the hook
-// forwarder or the probe. It returns at once otherwise.
+// forwarder, the probe, the start of a Docker of the agent's own, or the probe in a
+// container the agent started. It returns at once otherwise.
 func Main() {
 	if len(os.Args) < 2 {
 		return
@@ -111,6 +117,11 @@ func Main() {
 		os.Exit(probe(os.Args[2:]))
 	case modeTool:
 		os.Exit(serveTool())
+	case modeNest:
+		fmt.Fprintln(os.Stderr, wall.Nest(os.Args[2:]))
+		os.Exit(1)
+	case modeInner:
+		os.Exit(innerProbe())
 	}
 }
 
@@ -160,6 +171,17 @@ type Options struct {
 	// Leftovers lists what the adapter left behind for a run, for the check that Close
 	// removes everything; nil skips that check.
 	Leftovers func(runID string) ([]string, error)
+	// Runtime is the container runtime the image is started under, as a machine
+	// defines it; empty is the engine's default. With it or Docker set, the run selects
+	// the image by name among the machine's.
+	Runtime string
+	// Docker says the image holds dockerd and the enclosure gets a Docker of the
+	// agent's own. The suite then checks it from the agent's side, and from containers
+	// the agent starts.
+	Docker bool
+	// EngineID is the ID of the engine the adapter reaches, which the daemon inside must
+	// not be.
+	EngineID string
 }
 
 // Run checks the adapter against the guarantees.
@@ -208,7 +230,14 @@ func Run(t *testing.T, o Options) {
 		}
 	}
 	originHost := mustHost(t, o.Origin)
-	check("what went through the proxy is recorded", fmt.Sprint(egress) == "["+originHost+" allowed "+originHost+" denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address "+originHost+" denied "+originHost+" "+credentialHost+" denied "+credentialHost+" "+credentialHost+" allowed "+credentialHost+" "+toolHost+" allowed "+toolHost+" "+toolHost+" denied "+toolHost+"]", egress)
+	want := "[" + originHost + " allowed " + originHost + " denied.invalid denied  127.0.0.1 denied wall:own-address 169.254.169.254 denied wall:own-address " + originHost + " denied " + originHost + " " + credentialHost + " denied " + credentialHost + " " + credentialHost + " allowed " + credentialHost + " " + toolHost + " allowed " + toolHost + " " + toolHost + " denied " + toolHost
+	if o.Docker {
+		// Each container the agent starts reaches the origin once, through the relay.
+		for range innerKinds {
+			want += " " + originHost + " allowed " + originHost
+		}
+	}
+	check("what went through the proxy is recorded", fmt.Sprint(egress) == want+"]", egress)
 	check("a host held to paths is held to them", p.PathDenied == 403, fmt.Sprintf("a path outside the host's answered %d", p.PathDenied))
 	check("a terminated host is answered with the run's authority, held to the credential's paths", p.TLSDenied == 403 && p.TLSAllowed == 502,
 		fmt.Sprintf("outside the paths answered %d (%s), inside them %d (%s), want the proxy's 403 and, with nothing upstream, its 502; the bundle is %q with %d certificates", p.TLSDenied, p.TLSDeniedErr, p.TLSAllowed, p.TLSAllowedErr, p.Bundle, p.BundleCerts))
@@ -235,7 +264,30 @@ func Run(t *testing.T, o Options) {
 	check("the record is read-only", p.RecordWrite != "", "the probe opened events.jsonl for writing")
 	check("not root", p.UID != 0 && p.GID != 0, fmt.Sprintf("uid %d gid %d", p.UID, p.GID))
 	check("no capabilities and none to gain", zero(p.CapEff) && zero(p.CapPrm) && zero(p.CapBnd) && p.NoNewPrivs == "1", fmt.Sprintf("CapEff %s CapPrm %s CapBnd %s NoNewPrivs %s", p.CapEff, p.CapPrm, p.CapBnd, p.NoNewPrivs))
-	check("no container runtime socket", len(p.Sockets) == 0, p.Sockets)
+	if !o.Docker {
+		check("no container runtime socket", len(p.Sockets) == 0, p.Sockets)
+	} else {
+		n := p.Nested
+		if n == nil {
+			n = &nested{}
+		}
+		var others []string
+		for _, s := range p.Sockets {
+			if s != wall.NestSocket && s != "/run/docker.sock" {
+				others = append(others, s)
+			}
+		}
+		check("no container runtime socket but the enclosure's own daemon", len(others) == 0 && n.DaemonID != "" && n.DaemonID != o.EngineID, fmt.Sprintf("other sockets %v; the daemon inside is %q, the machine's engine %q", others, n.DaemonID, o.EngineID))
+		check("the agent reaches its own daemon, as its user", n.Ping == 200 && p.UID != 0, fmt.Sprintf("the daemon answered %d (%s) to uid %d", n.Ping, n.PingErr, p.UID))
+		check("nothing listens on the enclosure's network", len(n.Listening) == 0, n.Listening)
+		check("the agent builds an image of its own", n.Image == "", n.Image)
+		for _, k := range innerKinds {
+			c, ok := n.Containers[k.name]
+			check("a container the agent starts, "+k.name+", has no route out but the relay",
+				ok && c.Err == "" && c.OutsideAddress != "" && c.OutsideName != "" && c.Metadata != "" && c.OriginDirect != "" && c.ViaProxy == 200,
+				fmt.Sprintf("%+v", c))
+		}
+	}
 	check("no environment but what the run passes", !p.HostEnv && p.PassedEnv, fmt.Sprintf("the host's variable seen: %v; the run's variable seen: %v; all: %v", p.HostEnv, p.PassedEnv, p.EnvNames))
 	check("no file of the host but the mounts", !p.HostFile, "the probe read a file outside the workspace")
 	check("the settings are read-only", p.SettingsWrite != "", "the probe opened the runner's settings for writing")
@@ -263,6 +315,9 @@ func Run(t *testing.T, o Options) {
 		if e["type"] == "dev.qory.run.started" {
 			d := e["data"].(map[string]any)
 			check("the record names the wall", d["wall"] == o.Wall.Name() && d["image"] == o.Image, d)
+			if o.Runtime != "" || o.Docker {
+				check("the record names the image the policy selected, its runtime and its Docker", d["image_name"] == "suite" && fmt.Sprint(d["container_runtime"]) == fmt.Sprint(orNil(o.Runtime)) && (d["docker"] == true) == o.Docker, d)
+			}
 		}
 	}
 	if o.Leftovers != nil {
@@ -301,6 +356,14 @@ func mustHost(t *testing.T, raw string) string {
 	return u.Hostname()
 }
 
+// orNil is a string as a record holds it: absent when empty.
+func orNil(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 func zero(hex string) bool { return hex != "" && strings.Trim(hex, "0") == "" }
 
 // result is one run behind the wall.
@@ -337,18 +400,30 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 	if err != nil {
 		t.Fatal(err)
 	}
+	env := []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"PROBE_PASSED=yes", "PROBE_EXIT=7", "PROBE_HOST_FILE=" + outside,
+		"PROBE_ALLOWED=" + h.origin,
+		"PROBE_DENIED=http://denied.invalid/",
+		"PROBE_OWN=" + h.own,
+		"PROBE_HOST_PORT=" + strconv.Itoa(h.port),
+	}
+	if o.Docker {
+		env = append(env, "PROBE_DOCKER=1")
+	}
+	// With a runtime or a Docker the machine defines the image and the policy selects
+	// it by name; otherwise the image is the machine's default, a reference.
+	var images []session.Image
+	selected := ""
+	if o.Runtime != "" || o.Docker {
+		images = []session.Image{{Name: "suite", Ref: o.Image, Runtime: o.Runtime, Docker: o.Docker}}
+		selected = "suite"
+	}
 	res, err := session.Run(ctx, session.Spec{
-		Runtime: rt,
-		Command: o.Probe,
-		Args:    []string{modeProbe, "--settings", settings},
-		Env: []string{
-			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-			"PROBE_PASSED=yes", "PROBE_EXIT=7", "PROBE_HOST_FILE=" + outside,
-			"PROBE_ALLOWED=" + h.origin,
-			"PROBE_DENIED=http://denied.invalid/",
-			"PROBE_OWN=" + h.own,
-			"PROBE_HOST_PORT=" + strconv.Itoa(h.port),
-		},
+		Runtime:     rt,
+		Command:     o.Probe,
+		Args:        []string{modeProbe, "--settings", settings},
+		Env:         env,
 		Dir:         dir,
 		Interactive: interactive,
 		Stdin:       strings.NewReader(""),
@@ -357,12 +432,14 @@ func run(t *testing.T, o Options, interactive bool, h hosts, outside string) res
 		Policy: &session.Policy{Version: 1,
 			Egress:      session.PolicyEgress{Mode: "enforce", Allow: allow, Paths: map[string][]string{mustHost(t, h.origin): {"/"}, toolHost: {toolPaths}}},
 			Credentials: []session.PolicyCredential{{Name: "suite"}},
-			Tools:       []session.PolicyTool{{Name: "suite-tool"}}},
+			Tools:       []session.PolicyTool{{Name: "suite-tool"}},
+			Image:       selected},
 		Tools:         []session.Tool{{Name: "suite-tool", Command: []string{exe, modeTool}, Serves: []string{toolHost}}},
 		Credentials:   []session.Credential{{Name: "suite", Env: tokenVar, Hosts: []string{credentialHost}, Scheme: "bearer", Paths: []string{credentialPath}, Placeholders: []string{placeholderVar}}},
 		Forwarder:     o.Forwarder,
 		Wall:          o.Wall,
 		Image:         o.Image,
+		Images:        images,
 		RunnerVersion: "walltest",
 		Report:        func(l string) { t.Log("report:", l) },
 	})

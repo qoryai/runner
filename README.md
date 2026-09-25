@@ -112,13 +112,18 @@ res, err := session.Run(ctx, session.Spec{
 	Env:     []string{"ANTHROPIC_API_KEY=" + key}, // under a wall, nothing else goes in
 	Dir:     checkout,                            // the workspace, mounted at its own path
 	Mounts:  []wall.Mount{{Path: home, ReadOnly: true}}, // what else of this machine it sees
-	Image:   "example.com/agent:1",               // yours: the runtime and the toolchain
+	Image:   "base",                              // the default: a name of Images, or a reference
+	Images: []session.Image{                      // the machine's; a policy's image selects one by name
+		{Name: "base", Ref: "example.com/agent:1"},   // yours: the runtime and the toolchain
+		{Name: "with-docker", Ref: "example.com/agent:1-docker", Runtime: "sysbox-runc", Docker: true},
+	},
 	Limits:  wall.Limits{Memory: "8g", ShmSize: "2g"},  // what the agent may use; zero is the engine's default
 	Timeout: 5 * time.Hour,                       // the runtime is stopped at it; run.exited says so
 	Labels:  map[string]string{"issue": "77"},    // the caller's names for the run, in run.started and the run configuration request
 	Wall: &wall.Docker{
 		Helper:    linuxBuild,                    // a static Linux build of this program
 		RelayArgs: []string{"relay"},             // the mode of it that calls wall.Relay
+		NestArgs:  []string{"nest"},              // the mode of it that calls wall.Nest
 	},
 	Forwarder: []string{wall.HelperPath, "forward"},
 	Events:    os.Stdout,                         // every event as a JSON line, as well
@@ -127,7 +132,14 @@ res, err := session.Run(ctx, session.Spec{
 
 The helper is the caller's own binary, built static for Linux and mounted read-only into
 the enclosure, where it runs as the relay the agent reaches the proxy through and as the
-hook forwarder; the wall needs no image of its own. What every wall guarantees, what
+hook forwarder, and, for an image with a Docker of the agent's own, as `wall.Nest`, which
+starts the daemon inside and then the agent as its user; the wall needs no image of its
+own. The machine defines the images a run may start in, and the run's policy selects one
+by name with `image`, as it selects credentials and tools; without a selection the run
+starts in `Image`. An image with `Docker` gets a daemon of its own inside the enclosure,
+never the machine's, under a runtime that runs one without privileges, `sysbox-runc`;
+the enclosure's root is then a user of the machine's that is not root, and the agent is
+not root. What every wall guarantees, what
 crosses it and its limits are the contract's [wall section](contracts/runner/v1/README.md#the-wall),
 and the [`wall/walltest`](wall/walltest/walltest.go) suite checks the list from inside
 the enclosure. `Events` is any stream: a run with no receiver is followed on standard
@@ -154,7 +166,7 @@ run behind a wall, and reports what happened. It is two halves, and one of them 
 
 | Half | What it does | State |
 |---|---|---|
-| **The wall** | starts the agent in a container with no route out except to the session runner's proxy; the policy, the record and the server's secret stay on the node | ships since 0.2.0, as `qory run --wall docker`; since 0.3.0 it holds a run's credentials outside the container and holds a host to paths; since 0.6.0 it starts a run's tools outside the container and hands them the requests to the hosts they serve |
+| **The wall** | starts the agent in a container with no route out except to the session runner's proxy; the policy, the record and the server's secret stay on the node | ships since 0.2.0, as `qory run --wall docker`; since 0.3.0 it holds a run's credentials outside the container and holds a host to paths; since 0.6.0 it starts a run's tools outside the container and hands them the requests to the hosts they serve, starts a run in the image of the machine's its policy selects, and gives an agent a Docker daemon of its own inside the container under `sysbox-runc` |
 | **The fleet layer** | registers the node with a control plane, heartbeats and claims work | not built; no command starts it, and nothing here describes it as if one did. The run's policy from the control plane ships since 0.4.0, as the server's run configuration |
 
 So today a node is a machine with Docker on which `qory run --wall docker` is started,
@@ -256,9 +268,12 @@ wall:
   configuration when it offers one. With it set the run does not start unless the
   server answers the fetch and a ping, so a run meant to be observed is not run
   unobserved; `--local` runs with the files alone.
-- **`wall.env`** is the whole of the node's environment that goes in, by name. The model
-  credential is among it and is then the agent's; keeping it outside, injected by the
-  proxy, is not built.
+- **`wall.env`** is the whole of the node's environment that goes in, by name. A model
+  credential named here is the agent's. One defined under `credentials` and selected by
+  the run's policy stays outside instead: the proxy sets it on the requests to
+  `api.anthropic.com`, and the container gets a placeholder, `ANTHROPIC_API_KEY` or
+  `CLAUDE_CODE_OAUTH_TOKEN`, that is no credential (the contract's
+  [credentials section](contracts/runner/v1/README.md#credentials)).
 - `--wall none` runs once without the wall, `--wall docker --image ...` once with one on
   a node that has no `wall` section.
 
@@ -269,6 +284,9 @@ wall:
   transport through the relay.
 - Git inside the container when the checkout is a git worktree, whose repository data
   lies outside the mounts, unless the run lists that directory among them.
+- Images selected by the policy, and a Docker of the agent's own, from `runner.yaml`:
+  the runner carries both, and `qory` reads neither yet, so `wall.image` is the one image
+  a `qory run` starts in.
 
 ## Layout
 
@@ -278,7 +296,7 @@ wall:
 | `contracts/` | the Go package that embeds the contract and validates every fixture |
 | `session/` | the session runner: `session.Run` takes a launch spec, with the policy, the server and the wall as values, and returns the exit status; `session.Forward` is the hook forwarder behind it |
 | `runtimes/` | the runtime: `runtimes.Runtime`, the interface between the runner and the program it runs, how a launch is prepared, what the program's records mean, how it is asked to leave. `Described` is a runtime written as a descriptor, `Bare` a program the runner runs and does not read, `runtimes/claude` Claude Code, `runtimes/catalog` a name resolved to one, and `runtimes/runtimetest` the conformance suite every runtime passes |
-| `wall/` | the wall: the adapter interface, the Docker adapter, and `wall.Relay`, the one peer an enclosure reaches. `wall/walltest` is the conformance suite every adapter passes before it ships |
+| `wall/` | the wall: the adapter interface, the Docker adapter, `wall.Relay`, the one peer an enclosure reaches, and `wall.Nest`, which starts a Docker of the agent's own inside it. `wall/walltest` is the conformance suite every adapter passes before it ships |
 | `receiver/` | a server of the contract that is not a control plane: the handler the tests run the runner against, tested against the signed fixtures, a worked example of the contract's receiving rules |
 | `internal/` | what the layers share: `policy`, `proxy`, `credential`, `tool`, `event`, `sink`, `server`, `descriptor`, `socket`, `chunk` |
 | `node/` | the node runner's fleet layer, not built yet: it will register, heartbeat, take a dispatched task, hold the run's credentials and start a session through `session`, behind a wall ([§The node runner](#the-node-runner)) |
