@@ -23,7 +23,7 @@
       "pattern": "^[a-z][a-z0-9-]*$"
     },
     "runtime_version": {
-      "description": "The runtime version the rules were written against and the fixtures recorded from. Reported in run.started; not checked against the installed version, which the runner does not read.",
+      "description": "The runtime version the rules were written against and the fixtures recorded from. Reported in run.started; the runner never checks the installed version.",
       "type": "string",
       "minLength": 1
     },

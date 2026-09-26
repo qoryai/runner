@@ -67,7 +67,7 @@
       }
     },
     "tools": {
-      "description": "The tools of the machine's this run may reach, by name, behind a wall. The runner starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and sends it every request to them that it passes on: the allowed ones and, under observe, those whose path no rule covers, recorded as denied. A name the machine does not define is no run.",
+      "description": "The tools of the machine's this run may reach, by name, behind a wall. The runner starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and sends it every request to them that it allows, including under observe those whose path no rule covers, which are recorded as allowed with an empty path_rule. A name the machine does not define is no run.",
       "type": "array",
       "items": {
         "type": "object",

@@ -15,7 +15,7 @@ module manifest, contains the group and the version together, the way a Kubernet
 object does, because the file is read on its own and its format evolves with the
 product. A document addressed by a schema URL, read or written by a program, contains an
 integer that guards its reader, because the URL already contains the group and the
-generation. The policy, the server document, the documents a server answers and the
+generation. The policy, the server document, the documents a server returns and the
 descriptor are on this side: the objects the command passes to the runner and the ones a
 control plane sends over the wire, and the compose report `qory` writes is versioned
 the same way. CloudEvents adds its own `specversion: 1.0`, which is not ours to change.
@@ -58,9 +58,10 @@ The runner's duties, in the order that matters when they conflict:
    a developer machine the session runs with the developer's own environment. Behind a
    wall the runner keeps the credentials the run's policy selects in memory, outside the
    enclosure, and its proxy sets each on the requests to the hosts it is for
-   (§Credentials): the session reaches a code host and a model endpoint as itself and
-   never reads what it is. The tools the policy selects run outside as well, and the
-   proxy sends them the requests to the hosts they serve (§Tools).
+   (§Credentials): the session reaches a code host and a model endpoint as itself, and
+   its environment and files contain at most a placeholder for the credential. The tools
+   the policy selects run outside as well, and the proxy sends them the requests to the
+   hosts they serve (§Tools).
 4. **Liveness.** A heartbeat while the session runs; the exit as the result.
 5. **Reporting.** The session's terminal bytes as log chunks, the runner's observations
    as events, the runtime's own output mapped to session events by a descriptor. Every
@@ -282,7 +283,8 @@ never the reverse, so whoever writes a path writes it as the host does. A path
 that could be read two ways is denied in either mode, with the rule
 `wall:ambiguous-path`: an encoded slash, backslash, dot or percent sign, a backslash, an
 empty segment, a dot segment. Under `observe` a path no entry matches is recorded as
-denied and let through, as a host is, but the credential is set only where its own paths
+allowed with an empty `path_rule` and passed on, as a host no entry matches is recorded
+as allowed with an empty `rule`, but the credential is set only where its own paths
 match: observe mode sends no token to a path nobody configured. The host
 requested upstream is the one the connection was opened to and decided on, whatever
 `Host` a request contains. A denial is a `403` containing the method, the host and the path.
@@ -428,10 +430,11 @@ seconds, and removes the socket.
 
 **Reaching one.** For the hosts a tool serves, the proxy ends the session's TLS as for a
 credential's host, decides the host and the path by the policy as for any host, and
-sends the tool over the socket every request it passes on, the allowed ones and, under
-`observe`, those whose path no rule covers, recorded as denied: as HTTP/1.1, streamed
-both ways, the request as the session sent it, its query, headers, body and trailers,
-placeholders included, with the `Host` the connection was decided on. A plain request to
+sends the tool over the socket every request it allows, as HTTP/1.1, streamed both ways:
+the request as the session sent it, its query, headers, body and trailers, placeholders
+included, with the `Host` the connection was decided on. Under `observe` that includes a
+request whose path no rule covers, which is recorded as allowed with an empty
+`path_rule`. A plain request to
 such a host goes the same way. The proxy never dials a host a tool serves, so the host
 need not exist: a tool with no host of its own serves a name the machine's owner
 chooses, such as one under `.internal`, a domain reserved for private use, and the session
@@ -642,7 +645,7 @@ One `POST` per batch to the events URL, with the headers above and:
 | Header | Value |
 |---|---|
 | `Content-Type` | `application/cloudevents-batch+json` |
-| `X-Qory-Delivery` | a UUID per batch. A retry of the same batch sends the same id |
+| `X-Qory-Delivery` | a UUID per batch. A retry of the same batch contains the same id |
 | `X-Qory-Signature-256` | `sha256=` and the lower-case hex HMAC SHA-256 of the raw request body, keyed with the secret |
 | `X-Qory-Run-Configuration` | the server's digest of the run configuration the run uses, `sha256=<hex>`, when it uses a fetched one; absent otherwise |
 
@@ -708,7 +711,7 @@ policy for that; the runner reads nothing into them. The labels are bounded, at 
 a key of at most 64 bytes that needs no encoding and a value of at most 256 bytes, which
 is at most 768 once encoded, so the query the labels make is at most 13,343 bytes; a
 server whose front end limits a request line to less refuses the longest of them. The
-reference receiver, once the request verifies, answers `400` to a query that is not
+reference receiver, once the request verifies, returns `400` to a query that is not
 labels by these rules: a key sent twice, a key outside the grammar, a value too long or
 not UTF-8, more than 16. The answer is `200`, `application/json`, with the headers
 `X-Qory-Run-Configuration: sha256=<hex>` and `ETag: "sha256=<hex>"`, the same string,
@@ -733,7 +736,7 @@ comes first; the ping is a batch of one, sent before anything else. A receiver v
 the signature over the raw bytes with a constant-time comparison before parsing, then
 deduplicates on each event's `id`, since delivery is at least once.
 
-The server answers with a status; the body is ignored:
+The server returns a status; the body is ignored:
 
 | Status | Meaning |
 |---|---|
@@ -775,12 +778,12 @@ before it: refused while the lock is held; then what the run's wall leaves behin
 removed, by the run's label; a record with no `dev.qory.run.exited` gets one, numbered
 on from the last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`;
 and every event the server's filter selects that no accepted batch contained is posted,
-in order, in batches cut the same way, until accepted or given up on. The resend fetches
-the configuration document first, as a run does, and posts to the URL it defines. What
-is still not accepted is under `undelivered/` again. A receiver sees some events twice
-when the runner dies between an answer and its line, and discards them by `id` as any
-duplicate. Nothing of this recovers a machine that dies: the record is lost with it, and
-a receiver detects that from heartbeats that stop.
+in order, in batches cut the same way, until the server accepts them or the runner stops
+retrying. The resend fetches the configuration document first, as a run does, and posts
+to the URL it defines. What is still not accepted is under `undelivered/` again. A
+receiver sees some events twice when the runner dies between an answer and its line, and
+discards them by `id` as any duplicate. Nothing of this recovers a machine that dies:
+the record is lost with it, and a receiver detects that from heartbeats that stop.
 
 **The modes of a run:**
 
@@ -792,7 +795,7 @@ a receiver detects that from heartbeats that stop.
 
 A discovery fetch that fails, in transport, with a status other than `200` or with a
 document the schema refuses, or a ping not accepted: no run, and the error contains the
-URL and the status. A `run` section present and not answering `200`: no run. The
+URL and the status. A `run` section present and its fetch not returning `200`: no run. The
 command's `--policy`, a run's own policy under the machine's, keeps its meaning without
 a server; with a fetched run configuration the fetched policy is the policy, and
 `--policy` is refused with an error that states so.
@@ -802,7 +805,7 @@ that serves discovery, verifies each request as this section defines, returns th
 headers, deduplicates and appends to a file. The module's own tests run the runner's
 client against it. `fixtures/signed/` is what any receiver is tested against: one
 request per file, `method`, `target`, `headers`, `body` (a string, or `null` for a
-GET), the status a receiver answers as `expect`, and a `note` that explains why. Every
+GET), the status a receiver returns as `expect`, and a `note` that explains why. Every
 signature in them is real, under the published key and secret, and the timestamps are
 around `1700000000`, where a receiver under test sets its clock. A receiver written by
 anyone else follows this section, replays those files, and may read that code.
@@ -990,9 +993,9 @@ and points the variables programs read a bundle's path from at it: `SSL_CERT_FIL
 `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and
 `AWS_CA_BUNDLE` unless the caller sets others. The bundle is the image's and one more,
 never the run's alone, because those variables replace a program's trust and do not add
-to it; an image that keeps a bundle nowhere known gets the run's alone and reaches only
-the terminated hosts over TLS, which is the image's to mend. The authority's key never
-crosses.
+to it; an image that keeps a bundle in no place the wall reads gets the run's alone and
+reaches only the terminated hosts over TLS, which is the image's to mend. The
+authority's key never crosses.
 
 A run may set limits on what the agent uses, processors, memory, processes and the
 size of `/dev/shm`; an adapter passes them to its engine and a run that sets none gets
@@ -1100,12 +1103,12 @@ the option experimental.
 |---|---|---|
 | `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the published key and secret | `server.schema.json` |
-| `fixtures/configuration/` | configuration documents a server answers: events only, with a run section, with a section this revision does not define | `configuration.schema.json` |
-| `fixtures/run-configuration/` | run configuration documents a server answers | `run-configuration.schema.json` |
+| `fixtures/configuration/` | configuration documents a server returns: events only, with a run section, with a section this revision does not define | `configuration.schema.json` |
+| `fixtures/run-configuration/` | run configuration documents a server returns | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: the ping, a first batch | `batch.schema.json` |
-| `fixtures/signed/` | signed requests, one per file, under the published key and secret, with the status a receiver answers | the receiver, replaying each with its clock at `1700000000` |
+| `fixtures/signed/` | signed requests, one per file, under the published key and secret, with the status a receiver returns | the receiver, replaying each with its clock at `1700000000` |
 | `fixtures/run/<id>/` | recorded runs, `events.jsonl` and `output.log` each: one on a developer machine, one behind a wall that reaches a tool | `event.schema.json` per line, plus the sequence, source and concatenation rules |
-| `fixtures/invalid/` | documents each schema refuses, named `<schema>-<reason>` | the schema the name starts with, expecting a failure |
+| `fixtures/invalid/` | documents each schema refuses, whose name is `<schema>-<reason>` | the schema the name starts with, expecting a failure |
 | `runtimes/<name>/fixtures/<case>/` | descriptor fixtures | `record.schema.json` and the data schema of each expected type |
 
 Every fixture is synthetic. No host name of anyone's infrastructure, no real secret, no
