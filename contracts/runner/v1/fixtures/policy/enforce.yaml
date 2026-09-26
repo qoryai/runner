@@ -1,5 +1,5 @@
 # Deny every connection to a host outside the list, and record the denial. A host deny
-# names is denied though an allow entry covers it.
+# covers is denied though an allow entry covers it.
 version: 1
 egress:
   mode: enforce

@@ -90,7 +90,7 @@
       }
     },
     {
-      "description": "The data of each type validates against that type's schema, named by dataschema.",
+      "description": "The data of each type validates against that type's schema, the one dataschema points to.",
       "oneOf": [
         {
           "properties": {

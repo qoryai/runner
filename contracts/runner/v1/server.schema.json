@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/server.schema.json",
   "title": "Server",
-  "description": "The server the runner is a client of: where it fetches its configuration from, and the access key and secret it signs every request with. Lives outside the checkout, beside the policy. Configuring a server makes the run fail closed: no run starts unless the server answers the discovery fetch and the ping.",
+  "description": "The server the runner is a client of: where it fetches its configuration from, and the access key and secret it signs every request with. Lives outside the checkout, beside the policy. Configuring a server makes the run fail closed: no run starts unless the discovery fetch returns 200 and the server accepts the ping.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "url", "access_key", "secret"],
@@ -18,7 +18,7 @@
       "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)$"
     },
     "access_key": {
-      "description": "The key the server knows the runner by, sent in clear on every request: ak_ and 16 lower-case Crockford base32 characters.",
+      "description": "The key that identifies the runner to the server, sent in clear on every request: ak_ and 16 lower-case Crockford base32 characters.",
       "type": "string",
       "pattern": "^ak_[0-9a-hjkmnp-tv-z]{16}$"
     },

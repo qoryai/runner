@@ -1,4 +1,4 @@
-# A host carries no port, no scheme and no path.
+# A host contains no port, no scheme and no path.
 version: 1
 egress:
   mode: enforce

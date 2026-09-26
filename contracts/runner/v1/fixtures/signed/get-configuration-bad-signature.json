@@ -10,5 +10,5 @@
   },
   "body": null,
   "expect": 401,
-  "note": "Signed over the canonical string with a newline after the timestamp, which the contract does not have. A receiver that appends one accepts this and is wrong."
+  "note": "Signed over the canonical string with a newline after the timestamp; the contract's canonical string ends at the timestamp. A receiver that appends one accepts this and is wrong."
 }

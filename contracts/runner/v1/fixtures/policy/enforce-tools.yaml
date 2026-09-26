@@ -1,6 +1,6 @@
 # Reach a tool of the machine's, which serves a name that exists nowhere, on one prefix
-# of its paths. The tool is started for the run with the argument; the proxy hands it
-# every request to its host that the path rule lets through.
+# of its paths. The tool is started for the run with the argument; the proxy sends it
+# every request to its host that the path rule allows.
 version: 1
 egress:
   mode: enforce

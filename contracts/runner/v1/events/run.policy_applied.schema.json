@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/events/run.policy_applied.schema.json",
   "title": "dev.qory.run.policy_applied",
-  "description": "The policy the run is pinned to, as read before the runtime started, with where it came from. Emitted once at the start, and again at the sequence where a new run configuration from the server took effect.",
+  "description": "The policy the run is pinned to, as read before the runtime started, with where it came from. Emitted once at the start, and again at the sequence where a new run configuration from the server takes effect.",
   "type": "object",
   "additionalProperties": false,
   "required": ["mode", "allow", "source"],
@@ -10,13 +10,13 @@
     "mode": {"type": "string", "enum": ["observe", "enforce"]},
     "allow": {"description": "The allow list in force: the policy's entries. The hosts the harness declared do not narrow it.", "type": "array", "items": {"type": "string", "minLength": 1}},
     "deny": {"description": "The deny list in force: the policy's entries, each denied by name in either mode. Absent means an empty list.", "type": "array", "items": {"type": "string", "minLength": 1}},
-    "source": {"description": "config when a policy document was given to the runner; fetched when the policy is the security_policy of a run configuration the server answered; none when there was neither and the runner observes everything.", "type": "string", "enum": ["none", "config", "fetched"]},
+    "source": {"description": "config when a policy document is passed to the runner; fetched when the policy is the security_policy of a run configuration the server returned; none when there was neither and the runner observes everything.", "type": "string", "enum": ["none", "config", "fetched"]},
     "url": {"description": "The URL the run configuration was fetched from, without its query, when source is fetched.", "type": "string", "format": "uri", "minLength": 1},
     "digest": {"description": "sha256 of the policy document as canonical JSON, hex, when source is config or fetched: the version stamp of the run's policy, the same for the same policy however it was written. The runner's own.", "type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header carried it, when source is fetched. The server's own and opaque: the runner never recomputes it.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
+    "run_configuration": {"description": "The server's digest of the run configuration document, as its X-Qory-Run-Configuration header contained it, when source is fetched. The server's own and opaque: the runner never recomputes it.", "type": "string", "pattern": "^sha256=[0-9a-f]{64}$"},
     "paths": {"description": "The policy's path rules, by host, when it has any.", "type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "credentials": {
-      "description": "The credentials the run holds outside the enclosure, as resolved before the runtime started: where each goes and how. Never a token.",
+      "description": "The credentials the run keeps outside the enclosure, as resolved before the runtime started: where each goes and how. Never a token.",
       "type": "array",
       "items": {
         "type": "object",
@@ -31,7 +31,7 @@
       }
     },
     "tools": {
-      "description": "The tools the run reaches, started before the runtime: each one's name and the hosts it serves. Fixed for the run: a later policy_applied repeats them.",
+      "description": "The tools the run reaches, started before the runtime: each one's name and the hosts it serves. Fixed for the run: every further policy_applied repeats them.",
       "type": "array",
       "items": {
         "type": "object",
@@ -45,7 +45,7 @@
     },
     "image": {"description": "The name of the machine's image the policy selects, which the run started in. Absent when the policy selects none and the machine's default was used. Fixed for the run.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
     "terminated": {"description": "The hosts the proxy terminates TLS for in this run: the ones a credential is for, the ones a tool serves and the ones with path rules. Every other host is a tunnel the proxy does not read.", "type": "array", "items": {"type": "string", "minLength": 1}},
-    "harness_hosts": {"description": "The egress the harness declared, as handed to the runner, when it was. Information only: it decides nothing.", "type": "array", "items": {"type": "string", "minLength": 1}}
+    "harness_hosts": {"description": "The egress the harness declared, as passed to the runner, when present. Information only: it decides nothing.", "type": "array", "items": {"type": "string", "minLength": 1}}
   },
   "allOf": [
     {

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/configuration.schema.json",
   "title": "Configuration",
-  "description": "What a server answers to a signed GET of /.well-known/qory-configuration: where the runner posts its events, and where it fetches a run configuration when the server offers one. A section a runner does not know is ignored; an added section is a new revision of this contract.",
+  "description": "What a server returns for a signed GET of /.well-known/qory-configuration: where the runner posts its events, and where it fetches a run configuration when the server offers one. A section a runner does not recognise is ignored; an added section is a new revision of this contract.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "events"],
@@ -36,13 +36,13 @@
       }
     },
     "run": {
-      "description": "Where the run configuration is fetched from, when the server offers one. A server that names no run section offers none, and the run's policy is the machine's.",
+      "description": "Where the run configuration is fetched from, when the server offers one. A server whose document has no run section offers none, and the run's policy is the machine's.",
       "type": "object",
       "additionalProperties": false,
       "required": ["url"],
       "properties": {
         "url": {
-          "description": "The endpoint the run configuration is fetched from with a signed GET, every label of the run as its query, one parameter per label, sorted by key and percent-encoded. Which labels name what the run works on is the server's to decide. https, or http to a loopback address only.",
+          "description": "The endpoint the run configuration is fetched from with a signed GET, every label of the run as its query, one parameter per label, sorted by key and percent-encoded. Which labels identify what the run works on is the server's to decide. https, or http to a loopback address only.",
           "type": "string",
           "format": "uri",
           "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"
