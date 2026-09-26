@@ -9,6 +9,6 @@
   "properties": {
     "runner_version": {"description": "The runner module version, as Go stamps it.", "type": "string", "minLength": 1},
     "events": {"description": "The event types the server will receive, as its configuration named them.", "type": "array", "items": {"type": "string", "minLength": 1}},
-    "contract_version": {"description": "The revision of this contract the runner implements, the same integer as the X-Qory-Contract-Version header. A runner that sends none is revision 0.", "type": "integer", "minimum": 1}
+    "contract_version": {"description": "The revision of this contract the runner implements, the same integer as the X-Qory-Contract-Version header.", "type": "integer", "minimum": 1}
   }
 }

@@ -10,5 +10,5 @@
   },
   "body": null,
   "expect": 200,
-  "note": "The run configuration fetch for a run labelled forge github.com, issue 77 and repository acme/shop, signed at 1700000000: every label of the run is a query parameter, sorted by key and percent-encoded. A receiver hands all three to whatever chooses the policy; one that reads only forge and repository finds them as a runner before 0.5.0 sent them."
+  "note": "The run configuration fetch for a run labelled forge github.com, issue 77 and repository acme/shop, signed at 1700000000: every label of the run is a query parameter, sorted by key and percent-encoded. A receiver hands all three to whatever chooses the policy."
 }

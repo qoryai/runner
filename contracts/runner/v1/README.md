@@ -20,24 +20,15 @@ descriptor are on this side: the objects the command hands the runner and the on
 control plane delivers over the wire, and the compose report `qory` writes is versioned
 the same way. CloudEvents adds its own `specversion: 1.0`, which is not ours to change.
 
-**Revisions.** This is `v1`, revision 2. The runner announces the revision as one
-integer: the header `X-Qory-Contract-Version: 2` on every request to the server, and
-`contract_version: 2` in the ping's data. A runner that sends neither is revision 0,
-the runners 0.1.0 to 0.3.0, which had no server. A runner on revision N knows every
-section defined up to N and ignores a section it does not know, and a server may rely
-on the sections up to N and no more. An addition is a new revision; a breaking change
-is `v2`. What each revision added:
-
-| Revision | Runner | Adds |
-|---|---|---|
-| 1 | 0.4.0 | the server (§The server): discovery, signed requests, the run configuration fetched with the run's labels as its query, the digests and the reload |
-| 2 | 0.6.0 | tools (§Tools): `tools` in the policy and in `dev.qory.run.policy_applied`, and `tool`, `request_id` and `status` in `dev.qory.run.egress`. Images (§Images): `image` in the policy and in `dev.qory.run.policy_applied`, and `image_name`, `container_runtime` and `docker` in `dev.qory.run.started`; `container_runtime` and `docker` belong to an option that is experimental (§The wall). A server sends a run configuration that selects tools or an image only to a runner that announced revision 2 or later; an earlier runner refuses the policy, and the run does not start |
-
-Revision 1 was amended in place in 0.5.0, before any server relied on it: the run
-configuration request carries every label of the run, where 0.4 sent `forge` and
-`repository` alone. It was amended in place again in 0.5.1: every event type starts
-`dev.qory.`, where 0.4 and 0.5.0 sent `ai.qory.`. Revision 2 gained images before its
-first release, 0.6.0, so a runner that announces 2 reads both.
+**Revisions.** This is `v1`, revision 1. The runner announces the revision as one
+integer: the header `X-Qory-Contract-Version: 1` on every request to the server, and
+`contract_version: 1` in the ping's data. A runner on revision N knows every section
+defined up to N and ignores a section it does not know, and a server may rely on the
+sections up to N and no more. An addition is a new revision; a breaking change is `v2`.
+The revision is raised only once a released runner is in use; until then an addition
+goes into the revision the runner sends. Revision 1 is everything this document
+describes: the server (§The server), tools (§Tools) and images (§Images), where
+`container_runtime` and `docker` belong to an option that is experimental (§The wall).
 
 `v1` is the first generation of this namespace, not a stability promise. The runner
 module is at `v0`, which under Go's rules promises no compatibility, and until it
@@ -256,9 +247,9 @@ egress:
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. Absent is empty, and `enforce` with an empty list reaches nothing |
 | `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, whatever `allow` says, and the entry is the rule reported. Absent is empty |
 | `egress.paths` | by host, in `allow`'s grammar, the paths the session may ask of it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. An empty list is no path at all |
-| `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say. A policy defines none (§Credentials) |
-| `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one. A policy defines none (§Tools). Revision 2 |
-| `image` | the image of the machine's the run starts in, by the machine's name for it; absent is the machine's default. A policy names no reference and defines no image (§Images). Revision 2 |
+| `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say, of at most 4096 characters. A policy defines none (§Credentials) |
+| `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one, of at most 4096 characters. A policy defines none (§Tools) |
+| `image` | the image of the machine's the run starts in, by the machine's name for it; absent is the machine's default. A policy names no reference and defines no image (§Images) |
 
 **The harness's declared hosts.** The harness compose reports the hosts its modules
 declared, the command hands that list to the runner, and `dev.qory.run.policy_applied`
@@ -635,7 +626,7 @@ published key `ak_f1xt0re000000000`.
 |---|---|
 | `User-Agent` | `qory-runner/<version>` |
 | `X-Qory-Access-Key` | the access key |
-| `X-Qory-Contract-Version` | the revision of this contract the runner implements, `2` |
+| `X-Qory-Contract-Version` | the revision of this contract the runner implements, `1` |
 
 **A signed POST**, after [GitHub's model](https://docs.github.com/en/webhooks/webhook-events-and-payloads#delivery-headers).
 One `POST` per batch to the events URL, with the headers above and:
@@ -704,9 +695,7 @@ form is, a space as `+`, so a run labelled `forge: github.com`, `issue: "77"` an
 `repository: acme/shop` fetches `<run.url>?forge=github.com&issue=77&repository=acme%2Fshop`.
 When `run.url` has a query of its own, the labels are added to it, and a label replaces
 a parameter of the same name. The server decides which labels name what the run works
-on and answers the policy for that; the runner reads nothing into them. A runner before
-0.5.0 sent `forge` and `repository` alone, and a server that reads only those finds
-them the same way from either. The labels are bounded, at most 16, a key of at
+on and answers the policy for that; the runner reads nothing into them. The labels are bounded, at most 16, a key of at
 most 64 bytes that needs no encoding and a value of at most 256 bytes, which is at most
 768 once encoded, so the query the labels make is at most 13,343 bytes; a server whose
 front end limits a request line to less refuses the longest of them. The reference
@@ -777,9 +766,7 @@ it: refused while the lock is held; then what the run's wall left behind is remo
 the run's label; a record with no `dev.qory.run.exited` gets one, numbered on from the
 last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`; and every
 event the server's filter wants that no accepted batch named is posted, in order, in
-batches cut the same way, until accepted or given up on. The record of a runner
-before 0.5.1 is sent with each type under `dev.qory.`, and the file keeps what was
-written. The resend fetches the configuration document first, as a run does, and posts
+batches cut the same way, until accepted or given up on. The resend fetches the configuration document first, as a run does, and posts
 where it says. What is still not accepted is under `undelivered/` again. A receiver
 sees some events twice when the runner died between an answer and its line, and
 discards them by `id` as ever. Nothing of this recovers a machine that died: the record
@@ -1095,7 +1082,7 @@ the option experimental.
 
 | Directory | Holds | Validated against |
 |---|---|---|
-| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool | `policy.schema.json` |
+| `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each given an argument of 4096 characters, the most one may have | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the published key and secret | `server.schema.json` |
 | `fixtures/configuration/` | configuration documents a server answers: events only, with a run section, with a section this revision does not know | `configuration.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server answers | `run-configuration.schema.json` |

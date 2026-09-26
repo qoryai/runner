@@ -62,12 +62,12 @@
         "required": ["name"],
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
-          "argument": {"description": "What the run asks the credential for, a repository say, given to the definition's adapter as one argument. The definition says what an argument may look like; one it does not provide for is no run.", "type": "string", "minLength": 1, "maxLength": 256}
+          "argument": {"description": "What the run asks the credential for, a repository say, given to the definition's adapter as one argument. The definition says what an argument may look like; one it does not provide for is no run. At most 4096 characters, which leaves room for several repositories in one argument, acme/shop,acme/lib. The cap bounds only the size of the run's record, not what the argument may say: what guards it is the definition's pattern, which must match it whole, and it reaches the program as one word, with no shell.", "type": "string", "minLength": 1, "maxLength": 4096}
         }
       }
     },
     "tools": {
-      "description": "The tools of the machine's this run may reach, by name, behind a wall. The runner starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and hands it every request to them the policy lets through. A name the machine does not define is no run. Added in revision 2.",
+      "description": "The tools of the machine's this run may reach, by name, behind a wall. The runner starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and hands it every request to them the policy lets through. A name the machine does not define is no run.",
       "type": "array",
       "items": {
         "type": "object",
@@ -75,12 +75,12 @@
         "required": ["name"],
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
-          "argument": {"description": "What the run asks the tool for, a repository or a prefix say, given to the definition's command as one argument. The definition says what an argument may look like; one it does not provide for is no run.", "type": "string", "minLength": 1, "maxLength": 256}
+          "argument": {"description": "What the run asks the tool for, a repository or a prefix say, given to the definition's command as one argument. The definition says what an argument may look like; one it does not provide for is no run. At most 4096 characters, which leaves room for several repositories in one argument, acme/shop,acme/lib. The cap bounds only the size of the run's record, not what the argument may say: what guards it is the definition's pattern, which must match it whole, and it reaches the program as one word, with no shell.", "type": "string", "minLength": 1, "maxLength": 4096}
         }
       }
     },
     "image": {
-      "description": "The image of the machine's the run starts in, by name, behind a wall. The machine defines its images, a reference and the runtime the wall starts it under; the policy selects one and names no reference. Absent means the machine's default. A name the machine does not define is no run, and the image is fixed when the run starts. Added in revision 2.",
+      "description": "The image of the machine's the run starts in, by name, behind a wall. The machine defines its images, a reference and the runtime the wall starts it under; the policy selects one and names no reference. Absent means the machine's default. A name the machine does not define is no run, and the image is fixed when the run starts.",
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
     }

@@ -8,17 +8,11 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Upgrading
 
-- The contract is `v1` revision 2, and the runner sends `X-Qory-Contract-Version: 2`
-  and `contract_version: 2` in the ping. A server may put `tools` in a run
-  configuration's policy only for a runner that announced 2: an earlier runner's schema
-  refuses the policy, and its run does not start. `dev.qory.run.egress` carries three
-  fields it did not, `tool`, `request_id` and `status`; a receiver that validates event
-  data against the revision 1 schema, which refuses a field it does not name, validates
-  against this one.
-- Revision 2 carries images as well: a server may put `image` in a run configuration's
-  policy only for a runner that announced 2. `dev.qory.run.started` carries
-  `image_name`, `container_runtime` and `docker`, and `dev.qory.run.policy_applied`
-  carries `image`, when they apply.
+- The contract is `v1` revision 1, and the runner sends `X-Qory-Contract-Version: 1`
+  and `contract_version: 1` in the ping. A run configuration's policy may carry `tools`
+  and `image`. `dev.qory.run.egress` carries `tool`, `request_id` and `status`,
+  `dev.qory.run.started` carries `image_name`, `container_runtime` and `docker`, and
+  `dev.qory.run.policy_applied` carries `tools` and `image`, when they apply.
 - `wall.Request` has `Runtime` and `Docker`, and `wall.Docker` has `NestArgs`: a caller
   that builds a request of its own, or an adapter of its own, reads them. A caller that
   gives an image with a Docker of the agent's own gives its helper a mode that calls
@@ -96,6 +90,11 @@ release may change what an existing document does, and says so under Upgrading.
 - The contract says what a path rule does not read: a request's query, headers and
   body. A subresource in the query, a listing's prefix, a copy's source in a header and
   a GraphQL body are outside what a rule holds a run to.
+- A policy's credential and tool `argument` may have up to 4096 characters, where it
+  had 256, so one argument holds several repositories, `acme/shop,acme/lib`. The cap
+  bounds only the size of the run's record: what guards the argument is the
+  definition's pattern, which must match it whole, and it reaches the program as one
+  word, with no shell.
 
 ### Fixed
 
