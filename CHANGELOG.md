@@ -96,6 +96,13 @@ release may change what an existing document does, and says so under Upgrading.
   definition's pattern, which must match it whole, and it reaches the program as one
   word, with no shell.
 
+### Removed
+
+- The paths kept for what a runner before 0.5.1 left: sending a record again no longer
+  reads an `ai.qory.` type as `dev.qory.`, and a reap no longer looks for containers
+  and networks labelled `ai.qory.run`. No runner or server is in use yet, so there is no
+  such record or container to read.
+
 ### Fixed
 
 - A request's trailer reaches the host of a terminated connection. The proxy passed on

@@ -231,8 +231,8 @@ func TestRunConfigurationSignsTheQueryItSends(t *testing.T) {
 	if digest != "sha256="+strings.Repeat("0", 64) || rc.Version != 1 || !strings.Contains(string(rc.SecurityPolicy), `"api.example"`) {
 		t.Errorf("run configuration %+v, digest %s", rc, digest)
 	}
-	// The targets of the signed fixtures, every label and the two a runner before 0.5.0
-	// carried, then the edges.
+	// The targets of the signed fixtures, a run of three labels and a run of two, then
+	// the edges.
 	for _, tc := range []struct {
 		run    string
 		labels map[string]string
