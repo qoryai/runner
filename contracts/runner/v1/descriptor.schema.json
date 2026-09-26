@@ -18,7 +18,7 @@
       "const": 1
     },
     "runtime": {
-      "description": "The runtime this describes, as the launch spec names it: claude, codex.",
+      "description": "The runtime this describes, as the launch spec sets it: claude, codex.",
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*$"
     },
@@ -77,13 +77,13 @@
       }
     },
     "stop": {
-      "description": "How the runtime is asked to leave when the runner stops it, at a run's time limit or when the runner itself is stopped. Runtimes differ in what a signal means, one closes its session on SIGINT and drops it on SIGTERM, and this is where one says so. A run that names a signal or a grace of its own overrides it; absent, SIGTERM and ten seconds.",
+      "description": "How the runner stops the runtime, at a run's time limit or when the runner itself is stopped. Runtimes differ in what a signal means, one closes its session on SIGINT and drops it on SIGTERM, and this sets which the runtime gets. A run that sets a signal or a grace of its own overrides it; absent, SIGTERM and ten seconds.",
       "type": "object",
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
         "signal": {
-          "description": "The signal that asks the runtime to leave, among the ones the runner sends.",
+          "description": "The signal that requests the runtime's exit, among the ones the runner sends.",
           "enum": ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT", "SIGUSR1", "SIGUSR2"]
         },
         "grace": {
@@ -94,13 +94,13 @@
       }
     },
     "headless": {
-      "description": "The arguments that mean the runtime runs without an interface. When one of them is among the arguments the runtime is started with, the session runs on pipes even at a terminal, exactly as if the caller had asked for that: the runtime is recorded as not interactive and the output source is read. Absent, the caller alone decides.",
+      "description": "The arguments that mean the runtime runs without an interface. When one of them is among the arguments the runtime is started with, the session runs on pipes even at a terminal, exactly as when the caller requests pipes: the runtime is recorded as not interactive and the output source is read. Absent, the caller alone decides.",
       "type": "object",
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
         "args": {
-          "description": "The arguments, each as the runtime spells it. A short one matches the whole token (-p); a long one matches the token or its --name=value form (--print, --print=...). Nothing else is inferred: a runtime that takes its prompt on standard input has no argument to name, and a caller says headless itself.",
+          "description": "The arguments, each as the runtime spells it. A short one matches the whole token (-p); a long one matches the token or its --name=value form (--print, --print=...). Nothing else is inferred: a runtime that takes its prompt on standard input has no argument to list, and its caller sets headless itself.",
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
@@ -112,7 +112,7 @@
       }
     },
     "rules": {
-      "description": "Evaluated in order against every record of the named source; the first rule whose match holds produces one event, and a record no rule matches produces nothing.",
+      "description": "Evaluated in order against every record of the rule's source; the first rule whose match succeeds produces one event, and a record no rule matches produces nothing.",
       "type": "array",
       "minItems": 1,
       "items": {
@@ -133,7 +133,7 @@
             ]
           },
           "match": {
-            "description": "Every entry must hold: a path into the record equals the value, a string, number or boolean; or, with {present: true}, the path exists. Nothing else: no patterns, no ranges, no expressions.",
+            "description": "Every entry must match: a path into the record equals the value, a string, number or boolean; or, with {present: true}, the path exists. Nothing else: no patterns, no ranges, no expressions.",
             "type": "object",
             "minProperties": 1,
             "propertyNames": {

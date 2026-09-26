@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/runner/v1/run-configuration.schema.json",
   "title": "Run configuration",
-  "description": "What a server answers to a signed GET of its run configuration endpoint: the policy of the run, chosen by the server for the run's labels, which the request carries as its query. The digest the server sends beside it is the server's own and opaque to the runner. A member a runner does not know is ignored.",
+  "description": "What a server answers to a signed GET of its run configuration endpoint: the policy of the run, chosen by the server for the run's labels, which the request sends as its query. The digest the server sends beside it is the server's own and opaque to the runner. A member a runner does not know is ignored.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "security_policy"],
@@ -12,7 +12,7 @@
       "const": 1
     },
     "security_policy": {
-      "description": "The run's policy, a policy document as the machine's own would be. It is the policy: the runner does not merge it with the machine's or with the run's own.",
+      "description": "The run's policy, a policy document in the same shape as the machine's own. It is the policy: the runner does not merge it with the machine's or with the run's own.",
       "$ref": "policy.schema.json"
     }
   }

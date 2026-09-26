@@ -1,4 +1,4 @@
-# A headless section names at least one argument; an empty list says nothing.
+# A headless section lists at least one argument; an empty list defines nothing.
 version: 1
 runtime: claude
 runtime_version: "2.1.273"

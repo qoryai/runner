@@ -1,4 +1,4 @@
-# Ask a credential and a tool for several repositories in one argument, of 4096
+# Request several repositories of a credential and a tool in one argument, of 4096
 # characters, the most an argument may have. The cap bounds the size of the run's record;
 # what guards the argument is the definition's pattern, which must match it whole.
 version: 1

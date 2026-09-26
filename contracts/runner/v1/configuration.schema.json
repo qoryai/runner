@@ -36,13 +36,13 @@
       }
     },
     "run": {
-      "description": "Where the run configuration is fetched from, when the server offers one. A server that names no run section offers none, and the run's policy is the machine's.",
+      "description": "Where the run configuration is fetched from, when the server offers one. A server whose document has no run section offers none, and the run's policy is the machine's.",
       "type": "object",
       "additionalProperties": false,
       "required": ["url"],
       "properties": {
         "url": {
-          "description": "The endpoint the run configuration is fetched from with a signed GET, every label of the run as its query, one parameter per label, sorted by key and percent-encoded. Which labels name what the run works on is the server's to decide. https, or http to a loopback address only.",
+          "description": "The endpoint the run configuration is fetched from with a signed GET, every label of the run as its query, one parameter per label, sorted by key and percent-encoded. Which labels identify what the run works on is the server's to decide. https, or http to a loopback address only.",
           "type": "string",
           "format": "uri",
           "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)(/[^\\s]*)?$"

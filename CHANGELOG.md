@@ -81,6 +81,8 @@ release may change what an existing document does, and says so under Upgrading.
 
 ### Changed
 
+- The contract's wording is plainer: the README, the schemas' descriptions and the
+  fixtures' notes use plain verbs in the present tense. No meaning changed.
 - A wall points `AWS_CA_BUNDLE` at the run's bundle as well, beside `SSL_CERT_FILE`,
   `GIT_SSL_CAINFO`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`.
   The AWS CLI and botocore read `REQUESTS_CA_BUNDLE` only when neither `AWS_CA_BUNDLE`

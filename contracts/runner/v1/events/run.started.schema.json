@@ -9,12 +9,12 @@
   "properties": {
     "runtime": {"description": "The runtime's name: claude, codex.", "type": "string", "minLength": 1},
     "runtime_version": {"description": "The runtime version the runner's adapter for it, a descriptor say, was written against; not the version installed, which the runner does not know. Absent for a runtime the runner runs and does not read.", "type": "string", "minLength": 1},
-    "command": {"description": "The program started, as given to the runner.", "type": "string", "minLength": 1},
-    "args": {"description": "Its arguments, as given. Environment is never reported.", "type": "array", "items": {"type": "string"}},
+    "command": {"description": "The program started, as passed to the runner.", "type": "string", "minLength": 1},
+    "args": {"description": "Its arguments, as passed. Environment is never reported.", "type": "array", "items": {"type": "string"}},
     "dir": {"description": "The working directory the runtime starts in.", "type": "string", "minLength": 1},
     "interactive": {"description": "True when the session runs on a pseudo-terminal, false on pipes.", "type": "boolean"},
     "terminal": {
-      "description": "The size of the pseudo-terminal the runtime starts on: the runner's own terminal's when it has one, 80 by 24 otherwise. Present when interactive is true, absent on pipes. Each later change is one dev.qory.run.resized.",
+      "description": "The size of the pseudo-terminal the runtime starts on: the runner's own terminal's when it has one, 80 by 24 otherwise. Present when interactive is true, absent on pipes. Every change after that is one dev.qory.run.resized.",
       "type": "object",
       "additionalProperties": false,
       "required": ["cols", "rows"],
@@ -28,10 +28,10 @@
     "wall": {"description": "The adapter that built the enclosure the runtime runs in: docker. Absent when there is no wall, where command and dir are the machine's own; present, they are the enclosure's.", "type": "string", "minLength": 1},
     "image": {"description": "The image the enclosure runs, the reference. Present with wall.", "type": "string", "minLength": 1},
     "image_name": {"description": "The machine's name for the image, when the image is one the machine defines: the one the policy selected, or the machine's default by name.", "type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
-    "container_runtime": {"description": "The container runtime the wall started the image under, as the machine's definition named it: sysbox-runc. Absent means the engine's default.", "type": "string", "minLength": 1},
+    "container_runtime": {"description": "The container runtime the wall started the image under, as the machine's definition sets it: sysbox-runc. Absent means the engine's default.", "type": "string", "minLength": 1},
     "docker": {"description": "True when the enclosure has a Docker daemon of its own, started by the wall before the runtime. Absent otherwise.", "const": true},
     "labels": {
-      "description": "The caller's own names for the run, its key in a queue, a repository, an issue, as the command that started the run was given them. The runner copies them and reads nothing into them. Only this event carries them, and the run configuration request carries them as its query; a receiver keeps them with the run it creates on it.",
+      "description": "The caller's own names for the run, its key in a queue, a repository, an issue, as the command that started the run received them. The runner copies them and reads nothing into them. Only this event contains them, and the run configuration request sends them as its query; a receiver keeps them with the run it creates on it.",
       "type": "object",
       "maxProperties": 16,
       "propertyNames": {"pattern": "^[a-z0-9_.-]{1,64}$"},

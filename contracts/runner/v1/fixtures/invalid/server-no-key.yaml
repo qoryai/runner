@@ -1,4 +1,4 @@
-# The access key names the runner to the server; a server without one is refused.
+# The access key identifies the runner to the server; a server without one is refused.
 version: 1
 url: https://qory.example
 secret: fixture-secret-not-a-real-one
