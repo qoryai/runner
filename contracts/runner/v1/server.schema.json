@@ -18,7 +18,7 @@
       "pattern": "^(https://[^/?#@\\s]+|http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]+)?)$"
     },
     "access_key": {
-      "description": "The key the server knows the runner by, sent in clear on every request: ak_ and 16 lower-case Crockford base32 characters.",
+      "description": "The key that identifies the runner to the server, sent in clear on every request: ak_ and 16 lower-case Crockford base32 characters.",
       "type": "string",
       "pattern": "^ak_[0-9a-hjkmnp-tv-z]{16}$"
     },

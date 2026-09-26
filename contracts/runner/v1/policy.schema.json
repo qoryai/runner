@@ -54,7 +54,7 @@
       }
     },
     "credentials": {
-      "description": "The credentials of the machine's this run may use, by name, behind a wall. The runner keeps each outside the enclosure and the proxy sets it on the requests to the hosts it is for, which it terminates TLS for; the session never sees it. A name the machine does not define is no run.",
+      "description": "The credentials of the machine's this run may use, by name, behind a wall. The runner keeps each outside the enclosure and the proxy sets it on the requests to the hosts it is for, which it terminates TLS for; the session's environment and files contain at most a placeholder for it. A name the machine does not define is no run.",
       "type": "array",
       "items": {
         "type": "object",
@@ -62,12 +62,12 @@
         "required": ["name"],
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
-          "argument": {"description": "What the run requests of the credential, a repository say, passed to the definition's adapter as one argument. The definition sets what an argument may look like; one it does not provide for is no run. At most 4096 characters, which leaves room for several repositories in one argument, acme/shop,acme/lib. The cap bounds only the size of the run's record, not what the argument may say: what guards it is the definition's pattern, which must match it whole, and it reaches the program as one word, with no shell.", "type": "string", "minLength": 1, "maxLength": 4096}
+          "argument": {"description": "What the run requests of the credential, such as a repository, passed to the definition's adapter as one argument. The definition sets what an argument may look like; one it does not provide for is no run. At most 4096 characters, which leaves room for several repositories in one argument, acme/shop,acme/lib. The cap bounds only the size of the run's record, not what the argument may contain: what guards it is the definition's pattern, which must match it whole, and it reaches the program as one word, with no shell.", "type": "string", "minLength": 1, "maxLength": 4096}
         }
       }
     },
     "tools": {
-      "description": "The tools of the machine's this run may reach, by name, behind a wall. The runner starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and sends it every request to them that the policy allows. A name the machine does not define is no run.",
+      "description": "The tools of the machine's this run may reach, by name, behind a wall. The runner starts each for the run outside the enclosure; the proxy terminates TLS for the hosts it serves and sends it every request to them that it passes on: the allowed ones and, under observe, those whose path no rule covers, recorded as denied. A name the machine does not define is no run.",
       "type": "array",
       "items": {
         "type": "object",
@@ -75,7 +75,7 @@
         "required": ["name"],
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"},
-          "argument": {"description": "What the run requests of the tool, a repository or a prefix say, passed to the definition's command as one argument. The definition sets what an argument may look like; one it does not provide for is no run. At most 4096 characters, which leaves room for several repositories in one argument, acme/shop,acme/lib. The cap bounds only the size of the run's record, not what the argument may say: what guards it is the definition's pattern, which must match it whole, and it reaches the program as one word, with no shell.", "type": "string", "minLength": 1, "maxLength": 4096}
+          "argument": {"description": "What the run requests of the tool, such as a repository or a prefix, passed to the definition's command as one argument. The definition sets what an argument may look like; one it does not provide for is no run. At most 4096 characters, which leaves room for several repositories in one argument, acme/shop,acme/lib. The cap bounds only the size of the run's record, not what the argument may contain: what guards it is the definition's pattern, which must match it whole, and it reaches the program as one word, with no shell.", "type": "string", "minLength": 1, "maxLength": 4096}
         }
       }
     },

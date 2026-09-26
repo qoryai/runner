@@ -54,18 +54,18 @@ The runner's duties, in the order that matters when they conflict:
    denied in either mode; in enforce mode a connection to a host outside the allow
    list is denied as well. A denied attempt is recorded and the session continues; a
    denial never ends a run.
-3. **Credentials.** The session sees none of the runner's. On a developer machine the
-   session runs with the developer's own environment. Behind a wall the runner keeps the
-   credentials the run's policy selects in memory, outside the enclosure, and its
-   proxy sets each on the requests to the hosts it is for (§Credentials): the session
-   reaches a code host and a model endpoint as itself and never reads what it is. The
-   tools the policy selects run outside as well, and the proxy sends them the requests to
-   the hosts they serve (§Tools).
+3. **Credentials.** The session's environment and files contain none of the runner's. On
+   a developer machine the session runs with the developer's own environment. Behind a
+   wall the runner keeps the credentials the run's policy selects in memory, outside the
+   enclosure, and its proxy sets each on the requests to the hosts it is for
+   (§Credentials): the session reaches a code host and a model endpoint as itself and
+   never reads what it is. The tools the policy selects run outside as well, and the
+   proxy sends them the requests to the hosts they serve (§Tools).
 4. **Liveness.** A heartbeat while the session runs; the exit as the result.
 5. **Reporting.** The session's terminal bytes as log chunks, the runner's observations
    as events, the runtime's own output mapped to session events by a descriptor. Every
    event goes to files. When a server is configured, every event its configuration lists
-   goes there too. When the caller passes a stream, standard output say, every event
+   goes there too. When the caller passes a stream, such as standard output, every event
    goes there as well, as the line `events.jsonl` contains; that is how a run with no
    receiver is followed.
 6. **The harness reports over a local socket**, never over a network. A hook the
@@ -83,11 +83,11 @@ Stated so a receiver reads the record for what it is.
   and path. `dev.qory.run.policy_applied` lists those hosts as `terminated`, and no
   other host is read.
 - On a terminated host the session's side of the connection is HTTP/1.1, so a protocol
-  that needs HTTP/2 end to end, gRPC say, does not work there, and a program that pins
+  that needs HTTP/2 end to end, such as gRPC, does not work there, and a program that pins
   the host's own certificate refuses the run's. A host that sends a request's headers
-  back, an echo service, returns the credential the proxy set to the session. A path rule
-  reads a path and nothing else: where a host takes every request on one path, a
-  GraphQL endpoint say, the path is reachable or it is not, and what the request may
+  back, an echo service, returns to the session the credential the proxy set. A path rule
+  reads a path and nothing else: where a host, such as a GraphQL endpoint, takes every
+  request on one path, the path is reachable or it is not, and what the request may
   touch behind it is bounded by the credential's own scope, not by the runner.
 - Only proxy-aware programs are seen. The agent CLIs, git over HTTPS, curl, the package
   managers and the language runtimes read the proxy variables; SSH, and any program that
@@ -121,7 +121,7 @@ Stated so a receiver reads the record for what it is.
   the relay forwards opens with `QORY-RELAY`, a space, the token and a newline before
   the first byte of HTTP, and a connection that opens otherwise is closed unanswered
   and reported once. The token is never inside the enclosure.
-- On an engine inside a virtual machine, a Mac's say, the hook socket does not cross the
+- On an engine inside a virtual machine, such as a Mac's, the hook socket does not cross the
   file share, so a walled run there has no session events from hooks; the log, the
   egress record and the structured output are unaffected. The forwarder's only
   transport is the local socket (§The local socket).
@@ -131,7 +131,8 @@ Stated so a receiver reads the record for what it is.
 - A descriptor matches and copies. It never computes, so a mapping that needs a program
   is a runner change, never a configuration change.
 - The server is trusted with what it is sent. The secret authenticates the runner to
-  the server; only TLS authenticates the server to the runner.
+  the server. Over `https`, TLS authenticates the server to the runner; over `http` to a
+  loopback address, nothing does.
 
 ## Sequence
 
@@ -141,7 +142,7 @@ One run, on a developer machine, with a server configured:
    directory, whether the session is interactive, the policy document, the server
    document, the egress the harness declared, and the runtime name. The spec comes
    from the `qory` command, which reads the policy and the server from its own
-   configuration; the runner knows nothing of what composed it or where it was read.
+   configuration; the runner receives nothing about what composed it or where it was read.
 2. The runner creates a run id, a UUID version 7, and the run directory
    `.qory/runs/<id>/` in the checkout.
 3. It validates the server document once, when one is passed, and fetches the server's
@@ -198,7 +199,7 @@ enclosure passes the same signal on to the runtime inside.
 The run id is the runner's own, a UUID version 7, unless the caller already has one: a
 caller's id is a UUID in the canonical lower-case form, since it is every event's
 `subject` and the run directory's name, and anything else is no run. What else the caller
-knows the run by, a key in its queue, a repository, an issue, goes in `labels` on
+identifies the run by, a key in its queue, a repository, an issue, goes in `labels` on
 `dev.qory.run.started`: at most 16, a key of 1 to 64 of `a-z`, `0-9`, `_`, `.` and `-`, a
 value of at most 256 bytes. The runner reads nothing into them. It copies them into
 `dev.qory.run.started`, and no other event repeats them: a receiver joins on `subject`.
@@ -248,7 +249,7 @@ egress:
 | `egress.allow` | lower-case host names, or `*.` followed by a name for every host below it. No ports, no paths, no schemes. Absent is empty, and `enforce` with an empty list reaches nothing |
 | `egress.deny` | hosts the session may not reach, in `allow`'s grammar, in either mode: a host an entry covers is denied before `allow` and the mode are consulted, whatever `allow` contains, and the entry is the rule reported. Absent is empty |
 | `egress.paths` | by host, in `allow`'s grammar, the paths the session may request on it: a path matched whole, or up to a final `*` as a prefix. A host listed is terminated, which needs a wall; a host not listed is reached on every path. An empty list is no path at all |
-| `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, a repository say, of at most 4096 characters. A policy defines none (§Credentials) |
+| `credentials` | the credentials of the machine's the run may use: `name`, and an `argument` for an adapter, such as a repository, of at most 4096 characters. A policy defines none (§Credentials) |
 | `tools` | the tools of the machine's the run may reach: `name`, and an `argument` when the definition takes one, of at most 4096 characters. A policy defines none (§Tools) |
 | `image` | the image of the machine's the run starts in, by the machine's name for it; absent is the machine's default. A policy contains no reference and defines no image (§Images) |
 
@@ -297,19 +298,21 @@ nothing reaches the repository, whatever the token itself permits. Rules match t
 and never the query, so the `info/refs` a push requests first is allowed; it lists the
 same refs a fetch reads.
 
-*What a path rule does not read.* A rule reads the request's path and nothing else:
-not its query, not its headers, not its body. What a request specifies there is outside
-the rule: a subresource requested in the query, `?acl` say; a listing whose prefix is a
+*What a path rule does not read.* A rule reads the request's path and nothing else: not
+its query, not its headers, not its body. What a request specifies there is outside the
+rule: a subresource requested in the query, such as `?acl`; a listing whose prefix is a
 query parameter, on a host that lists at `/`; a copy that sets its source in a header,
 which writes under an allowed path what it reads from another; a GraphQL body that
-selects any repository the token reaches. A path rule limits a run to the paths it
-lists and covers nothing else. The rest is bounded by the credential's own scope, or by
-what serves the host, and whoever writes the policy for a host that accepts such
-requests checks them there or leaves the host out.
+selects any repository the token reaches. A path rule limits a run to the paths it lists
+and guarantees nothing about the rest. The rest is bounded by the credential's own
+scope, or by what serves the host, and whoever writes the policy for a host that accepts
+such requests checks them there or leaves the host out.
 
 ## Credentials
 
-A credential is a token the runner keeps for the session and the session never sees.
+A credential is a token the runner keeps outside the enclosure and the proxy sets on the
+requests it applies to; the session's environment and files contain at most a
+placeholder for it.
 The machine defines credentials; the run's policy selects among them by name and
 defines none, so whoever writes a policy chooses among the programs the machine's owner
 installed and never specifies one. They need a wall: without one a program that ignores the
@@ -323,8 +326,8 @@ A definition defines where the token comes from, exactly one of:
 | `file` | a file's content, read again whenever it is used, so whatever rotates it notifies no one |
 | `adapter` | what a program of the machine's prints |
 
-**An adapter** handles one kind of host: a source code host, an artifact store. The
-runner handles none, so nothing in it refers to one. The runner starts the adapter
+**An adapter** contains what one kind of host needs: a source code host, an artifact
+store. The runner contains nothing specific to any host. The runner starts the adapter
 outside the enclosure, with its own environment, a minute to answer, and `${argument}`
 in its arguments replaced by the policy's argument, which the definition's pattern must
 match whole: one word of the command line, never a shell's. It prints one document,
@@ -346,8 +349,8 @@ hosts, which scheme, and which paths make up what the run requests. The schemes 
 closed set, `bearer`, `basic` with a `username`, `header` with a header's name; an
 adapter chooses among what the runner implements and adds nothing to it. Of a host with
 `paths` the run reaches those and no other, so one repository's credential does not open
-another organization's on the same host; a path the adapter leaves out, the host's
-GraphQL endpoint say, is not reached. A definition may set `hosts` and `paths` of its
+another organization's on the same host; a path the adapter leaves out, such as the
+host's GraphQL endpoint, is not reached. A definition may set `hosts` and `paths` of its
 own for an adapter: the most the adapter may claim. For `env` and `file`, which have no
 adapter to define the use, the definition's `hosts`, scheme and `paths` are the use
 itself.
@@ -384,12 +387,12 @@ and no error contains a token.
 ## Tools
 
 A tool is a program of the machine's that serves hosts, for what a run reaches that
-needs more than a token in a header: a request signed with a key the session never sees,
-a protocol with an exchange of its own, a service that exists only on the machine, an
-MCP server say. The runner implements no protocol and a tool implements one, so no
-protocol, cloud or provider enters the runner. The machine defines tools; the run's
-policy selects among them by name, with an argument, as it selects credentials, and
-defines none. Tools need a wall, as credentials do.
+needs more than a token in a header: a request signed with a key that stays outside the
+enclosure, a protocol with an exchange of its own, a service that exists only on the
+machine, such as an MCP server. The runner implements no protocol and a tool implements
+one, so no protocol, cloud or provider enters the runner. The machine defines tools; the
+run's policy selects among them by name, with an argument, as it selects credentials,
+and defines none. Tools need a wall, as credentials do.
 
 | Definition | Meaning |
 |---|---|
@@ -425,12 +428,13 @@ seconds, and removes the socket.
 
 **Reaching one.** For the hosts a tool serves, the proxy ends the session's TLS as for a
 credential's host, decides the host and the path by the policy as for any host, and
-sends every request it allows to the tool over the socket, as HTTP/1.1, streamed
-both ways: the request as the session sent it, its query, headers, body and trailers,
+sends the tool over the socket every request it passes on, the allowed ones and, under
+`observe`, those whose path no rule covers, recorded as denied: as HTTP/1.1, streamed
+both ways, the request as the session sent it, its query, headers, body and trailers,
 placeholders included, with the `Host` the connection was decided on. A plain request to
 such a host goes the same way. The proxy never dials a host a tool serves, so the host
 need not exist: a tool with no host of its own serves a name the machine's owner
-chooses, under `.internal` say, a name reserved for private use, and the session
+chooses, such as one under `.internal`, a domain reserved for private use, and the session
 reaches it like any host. The proxy sets two headers of its own, after removing every
 header and trailer whose name starts `Qory-` from the request, in any case and with an
 underscore for the dash, so the values a tool reads are the proxy's, and a session that
@@ -439,7 +443,7 @@ lists them in `Connection` cannot remove them:
 | Header | Value |
 |---|---|
 | `Qory-Request-Id` | the proxy's id of the request, 32 lower-case hex digits: the `request_id` of its `dev.qory.run.egress` |
-| `Qory-Path-Rule` | the path rule that allowed the request; `none` when the host has path rules and, under `observe`, none covers the path, which a tool that enforces its rules refuses; absent when the host has no path rules |
+| `Qory-Path-Rule` | the path rule that matched the path; `none` when the host has path rules and none covers the path, which happens only under `observe` and which a tool that enforces its rules refuses; absent when the host has no path rules |
 
 The argument is not repeated per request: a tool started for the run has it on its
 command line.
@@ -467,7 +471,7 @@ tool's name, `request_id`, and, once the tool answers, `status`. A request a pat
 refuses contains the tool it did not reach, with `decision: denied`; a connection the
 policy refuses by its host, by the deny list, the guard or the allow list, contains
 none. The runner reads no body, so what an invocation does beyond its method and its
-path is the tool's to know; the runtime's hooks report the MCP call an agent makes
+path is visible only to the tool; the runtime's hooks report the MCP call an agent makes
 (`dev.qory.session.tool_started`).
 
 ## The events
@@ -532,11 +536,12 @@ is still running, each entry with the runtime's `id`, `type`, `status` and
 `description`, and a shell's `command` or a subagent's `agent_type`. The descriptor
 copies it as `background_tasks` onto `turn_finished` and `subagent_finished`, so a
 receiver that wants a task's end takes the first list the task is missing from. Claude
-Code's list contains no exit status and no duration for a background task, so the record
-has neither; a descriptor copies what a runtime reports and computes nothing, and the
-runtime's own output stream contains the rest. What becomes of work in the background
-when a run ends is the runtime's as well: it may end such work itself after its last
-answer, wait for it up to a ceiling of its own, and read that ceiling from a variable.
+Code reports no exit status and no duration for a background task, so the record has
+neither; a descriptor copies what a runtime reports and computes nothing, and anything
+more the runtime shows of a task is in its own output stream, recorded as
+`dev.qory.run.log`. What becomes of work in the background
+when a run ends is the runtime's as well: it may end such work itself shortly after its
+last answer, wait for it up to a ceiling of its own, and read that ceiling from a variable.
 The runner adds no rule of its own here. Behind a wall only the variables a run lists go
 in, so such a variable is listed like any other; and the run's stop signal and grace are
 what the runtime has to close such work when the runner stops it.
@@ -611,7 +616,7 @@ Configuring one makes the run fail closed on the discovery fetch and on the ping
 version: 1
 url: https://qory.example            # https, or http to a loopback address; scheme and host[:port] only
 access_key: ak_f1xt0re000000000       # ak_ and 16 lower-case Crockford base32 characters
-secret: fixture-secret-not-a-real-one # at least 16 characters; signs, never travels
+secret: fixture-secret-not-a-real-one # at least 16 characters; signs, never sent
 ```
 
 `url` is the server's origin and nothing after it: no path, no query, no fragment. The
@@ -666,7 +671,7 @@ answers:
 
 **Failure.** Every authentication failure is `401` with the body
 `{"error":"unauthorized"}` and nothing more: a header missing or empty, a key of the
-wrong shape, a key the server does not know or has revoked, a timestamp that is not an
+wrong shape, a key the server does not recognise or has revoked, a timestamp that is not an
 integer, a stale timestamp, a signature that does not match. The body never indicates which.
 A header sent twice is refused. The server verifies with a constant-time comparison,
 looks the key up only after its shape is checked, and logs nothing about the headers.
@@ -688,7 +693,7 @@ compares it byte for byte and never recomputes it.
 address; `events.types` is a non-empty list of full type names, or `*` for every type,
 and the ping is always sent. `run` is optional: a server whose document has no `run` section
 offers no run configuration, and the policy is the machine's. A top-level member the
-runner does not know is ignored, which is how a new revision adds a section.
+runner does not recognise is ignored, which is how a new revision adds a section.
 
 **The run configuration document.** `run-configuration.schema.json`. A signed `GET
 <run.url>?<the run's labels>`: one query parameter per label, the label's key as the
@@ -716,7 +721,7 @@ quoted the second time.
 
 `version` and `security_policy` are required; `security_policy` is a
 `policy.schema.json` document, and it is the policy: the runner does not merge it with
-the machine's or with the run's own. A member the runner does not know is ignored. The
+the machine's or with the run's own. A member the runner does not recognise is ignored. The
 digest is the server's and opaque; the runner keeps it, sends it back on every POST,
 and never recomputes it. Anything but `200`, or a document the schema refuses, is no
 run.
@@ -760,20 +765,20 @@ error. The file sink has every event regardless. The server never delays the ses
 posting is asynchronous behind a bounded queue, and a queue that fills spools to the
 same directory rather than blocking the runtime.
 
-**After a runner that died.** The run directory records what the server is still owed,
-without the runner that wrote it. `events.jsonl` is written as events happen.
-`delivered.log` beside it gets a line as each batch is accepted, the delivery id and the
-sequence of every event in it, and the one word `stopped` for a 410. `lock` is held by
-the runner for as long as it lives, by the kernel, so it is free once the runner is gone
-however it went. Sending a run again is the job's last step, whatever happens before it:
-refused while the lock is held; then what the run's wall leaves behind is removed, by
-the run's label; a record with no `dev.qory.run.exited` gets one, numbered on from the
-last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`; and every
-event the server's filter selects that no accepted batch contained is posted, in order,
-in batches cut the same way, until accepted or given up on. The resend fetches the
-configuration document first, as a run does, and posts to the URL it defines. What is
-still not accepted is under `undelivered/` again. A receiver sees some events twice when
-the runner dies between an answer and its line, and discards them by `id` as any
+**After a runner stops unexpectedly.** The run directory records what the server is
+still owed, without the runner that wrote it. `events.jsonl` is written as events
+happen. `delivered.log` beside it gets a line as each batch is accepted, the delivery id
+and the sequence of every event in it, and the one word `stopped` for a 410. `lock` is
+held by the runner for as long as it lives, by the kernel, so it is free once the runner
+is gone however it went. Sending a run again is the job's last step, whatever happens
+before it: refused while the lock is held; then what the run's wall leaves behind is
+removed, by the run's label; a record with no `dev.qory.run.exited` gets one, numbered
+on from the last event, with `state: failed`, `exit_code: -1` and `reason: runner_lost`;
+and every event the server's filter selects that no accepted batch contained is posted,
+in order, in batches cut the same way, until accepted or given up on. The resend fetches
+the configuration document first, as a run does, and posts to the URL it defines. What
+is still not accepted is under `undelivered/` again. A receiver sees some events twice
+when the runner dies between an answer and its line, and discards them by `id` as any
 duplicate. Nothing of this recovers a machine that dies: the record is lost with it, and
 a receiver detects that from heartbeats that stop.
 
@@ -865,13 +870,14 @@ runtime that closes its session on one signal and drops it on another defines wh
 
 **Headless**, optional: `args`, the arguments that mean the runtime runs without an
 interface. When one of them is among the arguments the runtime is started with, the
-session runs on pipes even at a terminal, exactly as when the caller requests pipes: the
+session runs on pipes even at a terminal, exactly as when the caller selects pipes: the
 runtime is recorded as not interactive, and the descriptor's `output` source is read. A
 short argument matches the whole token (`-p`); a long one matches the token or its
-`--name=value` form (`--print`, `--print=…`). Nothing else is inferred: a runtime that
-takes its prompt on standard input, say, has no argument to list, and its caller sets
-headless itself. Absent, the caller alone decides. Runtimes differ in which argument
-means "no interface", which is why the descriptor defines the inference and not the
+`--name=value` form (`--print`, `--print=…`). Nothing else is inferred: a runtime
+started without an interface in another way, such as one that takes its prompt on
+standard input, has no argument to list, and its caller sets headless itself. Absent,
+the caller alone decides. Runtimes differ in how they are started without an interface,
+which is why the descriptor defines the inference and not the
 command.
 
 **Fixtures**: `fixtures/<case>/records.jsonl`, records as the runtime produced them, in
@@ -1090,11 +1096,11 @@ the option experimental.
 
 ## Fixtures
 
-| Directory | Holds | Validated against |
+| Directory | Contains | Validated against |
 |---|---|---|
 | `fixtures/policy/` | policy documents that are accepted: observe, enforce, enforce with nothing, observe with a deny list, enforce with a tool, a credential and a tool each with an argument of 4096 characters, the most one may have | `policy.schema.json` |
 | `fixtures/server/` | server documents that are accepted, with the published key and secret | `server.schema.json` |
-| `fixtures/configuration/` | configuration documents a server answers: events only, with a run section, with a section this revision does not know | `configuration.schema.json` |
+| `fixtures/configuration/` | configuration documents a server answers: events only, with a run section, with a section this revision does not define | `configuration.schema.json` |
 | `fixtures/run-configuration/` | run configuration documents a server answers | `run-configuration.schema.json` |
 | `fixtures/batch/` | delivery bodies: the ping, a first batch | `batch.schema.json` |
 | `fixtures/signed/` | signed requests, one per file, under the published key and secret, with the status a receiver answers | the receiver, replaying each with its clock at `1700000000` |

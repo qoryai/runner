@@ -8,7 +8,7 @@
   "required": ["runtime", "command", "args", "dir", "interactive", "runner_version"],
   "properties": {
     "runtime": {"description": "The runtime's name: claude, codex.", "type": "string", "minLength": 1},
-    "runtime_version": {"description": "The runtime version the runner's adapter for it, a descriptor say, was written against; not the version installed, which the runner does not know. Absent for a runtime the runner runs and does not read.", "type": "string", "minLength": 1},
+    "runtime_version": {"description": "The runtime version the runner's adapter for it, such as a descriptor, was written against; not the version installed, which the runner does not read. Absent for a runtime the runner runs and does not read.", "type": "string", "minLength": 1},
     "command": {"description": "The program started, as passed to the runner.", "type": "string", "minLength": 1},
     "args": {"description": "Its arguments, as passed. Environment is never reported.", "type": "array", "items": {"type": "string"}},
     "dir": {"description": "The working directory the runtime starts in.", "type": "string", "minLength": 1},
