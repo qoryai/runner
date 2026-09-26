@@ -474,7 +474,7 @@ tool's name, `request_id`, and, once the tool answers, `status`. A request a pat
 refuses contains the tool it did not reach, with `decision: denied`; a connection the
 policy refuses by its host, by the deny list, the guard or the allow list, contains
 none. The runner reads no body, so what an invocation does beyond its method and its
-path is visible only to the tool; the runtime's hooks report the MCP call an agent makes
+path is not read by the runner, and the tool checks it; the runtime's hooks report the MCP call an agent makes
 (`dev.qory.session.tool_started`).
 
 ## The events
