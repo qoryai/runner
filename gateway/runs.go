@@ -468,7 +468,7 @@ func (g *Gateway) open(req *server.LinkRunRequest, how opening) (lr *linkRun, re
 		lr.registeredAt = time.Now()
 		lr.mu.Unlock()
 		// The record's first line, the registration the server accepted, never posted.
-		if _, err := st.Registered(map[string]any{"forager_version": reg.ForagerVersion, "events": reg.Events, "contract_version": reg.ContractVersion, "interval_seconds": reg.IntervalSeconds}); err != nil {
+		if _, err := st.Registered(map[string]any{"workspace": g.conf.Workspaces[0], "node_id": g.conf.NodeID, "instance_id": g.client.InstanceID, "forager_version": reg.ForagerVersion, "events": reg.Events, "contract_version": reg.ContractVersion, "interval_seconds": reg.IntervalSeconds}); err != nil {
 			return fail(err)
 		}
 		lr.live = newLive(ctx, g.client, g.conf, g.confDigest, req.RunID, g.report)

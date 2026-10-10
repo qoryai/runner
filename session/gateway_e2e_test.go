@@ -220,7 +220,7 @@ func newControl(t *testing.T) *control {
 		Stop:   func(string) bool { return c.stop.Load() },
 		Configuration: func() ([]byte, string) {
 			pin, _ := json.Marshal(c.pin)
-			doc := `{"version":1,"node_id":"nd_f1xt0re000000000","apiary_public_key":` + string(pin) +
+			doc := `{"version":1,"node_id":"nd_f1xt0re000000000","workspaces":["ws_f1xt0re000000000"],"apiary_public_key":` + string(pin) +
 				`,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]},"run":{"url":"` + c.srv.URL + receiver.DefaultRunPath + `"}}`
 			return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
 		},
