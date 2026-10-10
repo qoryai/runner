@@ -1013,7 +1013,8 @@ that runs one instance at a time, or to a node pool, `np_`, whose instances shar
 access key, up to a limit the pool may set; each id is followed by 16 lower-case
 Crockford base32 characters. A node or node pool belongs to one workspace, `ws_`
 followed by 16 lower-case Crockford base32 characters, `^ws_[0-9a-hjkmnp-tv-z]{16}$`:
-Qory Apiary's public id of the workspace, which is not the directory a run works in. An instance is one running copy of `qory` with the access
+Qory Apiary's public id of the workspace, which is not the directory a run works in.
+An instance is one running copy of `qory` with the access
 key. Its instance id, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, is a signed line of every
 request, for display, audit, per-instance events and the instance limit; authorisation
 rests on the access key alone, and whoever holds the access key can claim any instance
@@ -1239,13 +1240,15 @@ Forager, which compares it byte for byte and never recomputes it.
  "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
 ```
 
-`version`, `node_id`, `workspaces`, `events`, `run` and `apiary_public_key` are required. `node_id` is the id
-of the access key's node or node pool, `^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`, listed for
-display: `qory` prints it. `workspaces` lists the workspaces the access key may name, by
-their ids, `^ws_[0-9a-hjkmnp-tv-z]{16}$`; for a node's or node pool's access
-key it holds exactly one, the workspace its node or node pool belongs to. The gateway
-records it, and `node_id`, in a run's `dev.qory.run.registered`. `apiary_public_key` lists the server's current key, and
-during a rotation the next one, for information: Forager verifies under its pin alone.
+`version`, `node_id`, `workspaces`, `events`, `run` and `apiary_public_key` are
+required. `node_id` is the id of the access key's node or node pool,
+`^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`, listed for display: `qory` prints it. `workspaces`
+lists the workspaces the access key may name, by their ids,
+`^ws_[0-9a-hjkmnp-tv-z]{16}$`; for a node's or node pool's access key it holds exactly
+one, the workspace its node or node pool belongs to. The gateway records its one entry
+as `workspace`, and `node_id`, in a run's `dev.qory.run.registered`.
+`apiary_public_key` lists the server's current key, and during a rotation the next one,
+for information: Forager verifies under its pin alone.
 `secrets` is optional, `{url}` with `events.url`'s grammar: present for an access key
 allowed stored secrets, and a server that lists it requires a wall for every run. Discovery lists no key endpoint: keys change through
 enrolment alone. A `401` is no run, `unauthorized`. `events.url` is `https`, or `http` to a loopback
@@ -1451,15 +1454,15 @@ id, and the events endpoint, accepts the public keys listed in its own configura
 and skips enrolment, verifies each request and answers in the order this section
 defines, signs every answer after verification under its own key, returns the digest
 headers, deduplicates and appends to a file. Its discovery lists `version`, `node_id`,
-`workspaces`, `events`, `run` and `apiary_public_key`, and no `secrets`. A hook of the server that
-embeds it is handed the run id, the labels and `about`, and returns the run's run
-configuration, or refuses the run with a status and a code or with no code; `about` is
-for display and never selects a policy. Without a hook it answers every registration
-`{"version": 1}`, no policy. It keeps each registration it accepted by its run id: the
-same bytes under the same access key get the same answer again, and the same run id
-under another access key, even with the same bytes, or other bytes, a signed `409`
-`run_id_used`. It answers a reload only for a run the same access key registered, and
-`404` otherwise. The module's own tests run Forager's client against it.
+`workspaces`, `events`, `run` and `apiary_public_key`, and no `secrets`. A hook of the
+server that embeds it is handed the run id, the labels and `about`, and returns the
+run's run configuration, or refuses the run with a status and a code or with no code;
+`about` is for display and never selects a policy. Without a hook it answers every
+registration `{"version": 1}`, no policy. It keeps each registration it accepted by its
+run id: the same bytes under the same access key get the same answer again, and the same
+run id under another access key, even with the same bytes, or other bytes, a signed
+`409` `run_id_used`. It answers a reload only for a run the same access key registered,
+and `404` otherwise. The module's own tests run Forager's client against it.
 `fixtures/signed/` is what any receiver is tested against: one request per file,
 `method`, `target`, `headers`, a header sent twice being a list of its values, `body`
 (a string, or `null` for a GET), the status a receiver returns as `expect`, the code of
@@ -1570,9 +1573,9 @@ registration toward the server. The session sends its heartbeats every `interval
 has `address`, `host:port`: the gateway's proxy, the one address the run's agent traffic
 goes to (Agent traffic, below), on loopback on one machine, and the gateway's one
 address behind a separate gateway. The discovery contains no
-`node_id`, no `apiary_public_key` and no `secrets`: the node, the server's keys and the
-run's stored secrets are the gateway's, toward the server. A member Forager does not
-recognise is ignored.
+`node_id`, no `workspaces`, no `apiary_public_key` and no `secrets`: the node, the
+workspace, the server's keys and the run's stored secrets are the gateway's, toward the
+server. A member Forager does not recognise is ignored.
 
 ```json
 {"version": 1,

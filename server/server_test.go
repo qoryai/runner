@@ -317,8 +317,8 @@ func (v *verified) client() *server.Client {
 // the document decoded with a section Forager does not know ignored, the node id,
 // the run endpoint, the digest from the header, the filter, which never wants
 // dev.qory.run.registered, and no run on a status that is not 200 or on a document
-// without the run endpoint or whose run endpoint has a trailing slash, a query or a
-// fragment.
+// without workspaces, without the run endpoint or whose run endpoint has a trailing
+// slash, a query or a fragment.
 func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	v := newVerified(t)
 	c := v.client()
@@ -337,10 +337,12 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 		t.Error("the filter of a listed configuration is wrong")
 	}
 	inner := v.srv.Config.Handler
-	for name, run := range map[string]string{"without the run endpoint": "", "with a trailing slash": `,"run":{"url":"` + v.srv.URL + `/v1/runs/"}`,
-		"with a query": `,"run":{"url":"` + v.srv.URL + `/v1/runs?x=1"}`, "with a fragment": `,"run":{"url":"` + v.srv.URL + `/v1/runs#x"}`} {
+	workspaces, run := `"workspaces":["ws_f1xt0re000000000"],`, `,"run":{"url":"`+v.srv.URL+`/v1/runs"}`
+	for name, d := range map[string]struct{ workspaces, run string }{"without workspaces": {"", run},
+		"without the run endpoint": {workspaces, ""}, "with a trailing slash": {workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs/"}`},
+		"with a query": {workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs?x=1"}`}, "with a fragment": {workspaces, `,"run":{"url":"` + v.srv.URL + `/v1/runs#x"}`}} {
 		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			doc := []byte(`{"version":1,"node_id":"nd_f1xt0re000000000","workspaces":["ws_f1xt0re000000000"],"events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
+			doc := []byte(`{"version":1,"node_id":"nd_f1xt0re000000000",` + d.workspaces + `"events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + d.run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
 			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
 			w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(accesskey.Answer{Status: 200, RequestSignature: r.Header.Get(server.HeaderSignature), Body: doc, Configuration: "sha256=c0"}))
 			w.Write(doc)
