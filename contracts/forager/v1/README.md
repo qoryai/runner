@@ -1243,10 +1243,9 @@ Forager, which compares it byte for byte and never recomputes it.
 `version`, `node_id`, `workspaces`, `events`, `run` and `apiary_public_key` are
 required. `node_id` is the id of the access key's node or node pool,
 `^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`, listed for display: `qory` prints it. `workspaces`
-lists the workspaces the access key may name, by their ids,
-`^ws_[0-9a-hjkmnp-tv-z]{16}$`; for a node's or node pool's access key it holds exactly
-one, the workspace its node or node pool belongs to. The gateway records its one entry
-as `workspace`, and `node_id`, in a run's `dev.qory.run.registered`.
+holds exactly one id, `^ws_[0-9a-hjkmnp-tv-z]{16}$`: the workspace the access key's node
+or node pool belongs to. The gateway records its one entry as `workspace`, and
+`node_id`, in a run's `dev.qory.run.registered`.
 `apiary_public_key` lists the server's current key, and during a rotation the next one,
 for information: Forager verifies under its pin alone.
 `secrets` is optional, `{url}` with `events.url`'s grammar: present for an access key

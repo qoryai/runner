@@ -52,11 +52,11 @@ release may change what an existing document does, and says so under Upgrading.
   with no policy, and answers every registration `{"version":1}`.
 - `dev.qory.ping` is gone, with `events/ping.schema.json`, and nothing is posted in its
   place. Once the server accepts the registration, the gateway writes
-  `dev.qory.run.registered` as line 1 of its record, with `workspace`, the one workspace
-  discovery lists, discovery's `node_id`, `instance_id`, the instance id the registration
-  was signed with as its `X-Qory-Instance-Id` carried it, and the registration's
-  `forager_version`, `events`, `contract_version` and `interval_seconds`, each required;
-  it is the record's alone and never posted.
+  `dev.qory.run.registered` as line 1 of its record, with these members, each required:
+  `workspace`, the one workspace discovery lists; discovery's `node_id`; `instance_id`,
+  the instance id the registration was signed with, as its `X-Qory-Instance-Id` carried
+  it; and the registration's `forager_version`, `events`, `contract_version` and
+  `interval_seconds`. It is the record's alone and never posted.
   `event.RunRegistered` names it. The gateway's `delivered.log` begins
   `registered <seq>`. Heartbeats run from the accepted registration until the final
   event.
@@ -642,10 +642,10 @@ release may change what an existing document does, and says so under Upgrading.
   and instances, the pin, the request string, signed answers, the coded refusals and
   their order, and enrolment.
 - Discovery lists `node_id`, `workspaces` and `apiary_public_key`, each required, and
-  `secrets` for an access key allowed stored secrets. `workspaces` lists the workspaces
-  the access key may name, by their ids, `ws_` and 16 lower-case Crockford base32
-  characters: for a node's or node pool's access key exactly one, the workspace its node
-  or node pool belongs to, which is Qory Apiary's and not the directory a run works in.
+  `secrets` for an access key allowed stored secrets. `workspaces` holds exactly one id,
+  `ws_` and 16 lower-case Crockford base32 characters: the workspace the access key's
+  node or node pool belongs to, which is Qory Apiary's and not the directory a run works
+  in.
   A document without `workspaces`, or with two, is refused. `server.Configuration` has
   `Workspaces`.
 - The registration's `interval_seconds` is the run's heartbeat interval, a whole

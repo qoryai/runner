@@ -206,9 +206,8 @@ type Configuration struct {
 	Version int `json:"version"`
 	// NodeID is the id of the access key's node, nd_, or node pool, np_, for display.
 	NodeID string `json:"node_id"`
-	// Workspaces lists the workspaces the access key may name, by their ids, ws_: for a
-	// node's or node pool's access key exactly one, the workspace its node or node pool
-	// belongs to.
+	// Workspaces holds exactly one workspace id, ws_: the workspace the access key's node
+	// or node pool belongs to.
 	Workspaces []string `json:"workspaces"`
 	Events     Events   `json:"events"`
 	// Run is the run endpoint, which every discovered configuration has: a run

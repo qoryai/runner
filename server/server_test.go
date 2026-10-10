@@ -326,7 +326,7 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if digest != "sha256=c0" || conf.NodeID != "nd_f1xt0re000000000" || conf.Events.URL != v.srv.URL+"/v1/events" || len(conf.Events.Types) != 1 || conf.Run == nil || conf.Run.URL != v.srv.URL+"/v1/runs" || conf.Secrets != nil || len(conf.ApiaryPublicKey) != 1 {
+	if digest != "sha256=c0" || conf.NodeID != "nd_f1xt0re000000000" || len(conf.Workspaces) != 1 || conf.Workspaces[0] != "ws_f1xt0re000000000" || conf.Events.URL != v.srv.URL+"/v1/events" || len(conf.Events.Types) != 1 || conf.Run == nil || conf.Run.URL != v.srv.URL+"/v1/runs" || conf.Secrets != nil || len(conf.ApiaryPublicKey) != 1 {
 		t.Errorf("discovered %+v, digest %s", conf, digest)
 	}
 	if !conf.Wants("dev.qory.run.log") || conf.Wants("dev.qory.run.registered") {
