@@ -52,8 +52,11 @@ release may change what an existing document does, and says so under Upgrading.
   with no policy, and answers every registration `{"version":1}`.
 - `dev.qory.ping` is gone, with `events/ping.schema.json`, and nothing is posted in its
   place. Once the server accepts the registration, the gateway writes
-  `dev.qory.run.registered` as line 1 of its record, with `forager_version`, `events`,
-  `contract_version` and `interval_seconds`; it is the record's alone and never posted.
+  `dev.qory.run.registered` as line 1 of its record, with these members, each required:
+  `workspace`, the one workspace discovery lists; discovery's `node_id`; `instance_id`,
+  the instance id the registration was signed with, as its `X-Qory-Instance-Id` carried
+  it; and the registration's `forager_version`, `events`, `contract_version` and
+  `interval_seconds`. It is the record's alone and never posted.
   `event.RunRegistered` names it. The gateway's `delivered.log` begins
   `registered <seq>`. Heartbeats run from the accepted registration until the final
   event.
@@ -464,7 +467,7 @@ release may change what an existing document does, and says so under Upgrading.
   those labels, and those keys with those values. Discovery on the link is
   `link-discovery.schema.json`, with `events.interval_seconds`, the gateway's heartbeat
   interval, `proxy.address`, the gateway's proxy as `host:port`, on loopback on one
-  machine, and no `node_id`, `apiary_public_key` or `secrets`; a batch is
+  machine, and no `node_id`, `workspaces`, `apiary_public_key` or `secrets`; a batch is
   `link-batch.schema.json`, events without `sequence`, which the gateway numbers. A
   session writes no event the gateway or the run credential decides: the gateway
   refuses a batch, `400` `invalid_request`, nothing of it numbered, with an event of
@@ -638,8 +641,13 @@ release may change what an existing document does, and says so under Upgrading.
   answer that does not verify is retried. §The server defines the access key, nodes
   and instances, the pin, the request string, signed answers, the coded refusals and
   their order, and enrolment.
-- Discovery lists `node_id` and `apiary_public_key`, both required, and `secrets` for
-  an access key allowed stored secrets.
+- Discovery lists `node_id`, `workspaces` and `apiary_public_key`, each required, and
+  `secrets` for an access key allowed stored secrets. `workspaces` holds exactly one id,
+  `ws_` and 16 lower-case Crockford base32 characters: the workspace the access key's
+  node or node pool belongs to, which is Qory Apiary's and not the directory a run works
+  in.
+  A document without `workspaces`, or with two, is refused. `server.Configuration` has
+  `Workspaces`.
 - The registration's `interval_seconds` is the run's heartbeat interval, a whole
   number of seconds from 1 to 300, `gateway.Config.Heartbeat`, which the heartbeats
   tick at. `elapsed_seconds` counts, on a session's run, from the session's discovery of its
@@ -652,8 +660,12 @@ release may change what an existing document does, and says so under Upgrading.
   `server-no-access-key-id`, `server-no-pin`, `server-secret-member` and
   `event-registered-interval-too-long` in place of `server-no-key`;
   `fixtures/configuration/with-secrets.json` is new; the configuration fixtures list
-  `node_id` and `apiary_public_key`; and the `dev.qory.run.registered` of the recorded
-  runs contains `interval_seconds`.
+  `node_id`, `workspaces` and `apiary_public_key`; and the `dev.qory.run.registered` of
+  the recorded runs contains `workspace`, `node_id`, `instance_id` and
+  `interval_seconds`. `fixtures/invalid/` has `configuration-no-workspaces`,
+  `configuration-two-workspaces`, `event-registered-no-workspace` and
+  `link-discovery-workspaces`, and the discovery known answer, its body, digest and
+  signature, is recomputed.
 - The contract is at `contracts/forager/v1`, and every `$id` and `dataschema` is
   `https://qory.dev/contracts/forager/v1/…`. `dev.qory.run.registered` and
   `dev.qory.run.started` contain `forager_version`; `dev.qory.run.exited`'s `reason` for a run whose end was

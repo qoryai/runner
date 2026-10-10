@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://qory.dev/contracts/forager/v1/configuration.schema.json",
   "title": "Configuration",
-  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node, the workspaces it may name, where Forager posts its events, where a run registers, whether the access key is allowed stored secrets, and the server's keys. A section Forager does not recognise is ignored; an added section is a new revision of this contract.",
+  "description": "What a server returns for a signed GET of /.well-known/qory-configuration, per access key: the access key's node and its workspace, where Forager posts its events, where a run registers, whether the access key is allowed stored secrets, and the server's keys. A section Forager does not recognise is ignored; an added section is a new revision of this contract.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "node_id", "workspaces", "events", "run", "apiary_public_key"],
@@ -17,7 +17,7 @@
       "pattern": "^n[dp]_[0-9a-hjkmnp-tv-z]{16}$"
     },
     "workspaces": {
-      "description": "The workspaces the access key may name, each by its id, ws_ followed by 16 lower-case Crockford base32 characters. For a node's or node pool's access key, exactly one: the workspace its node or node pool belongs to. A document without workspaces is refused.",
+      "description": "Exactly one workspace id, ws_ followed by 16 lower-case Crockford base32 characters: the workspace the access key's node or node pool belongs to. A document without workspaces, or with more than one, is refused.",
       "type": "array",
       "minItems": 1,
       "maxItems": 1,

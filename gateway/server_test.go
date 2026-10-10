@@ -38,11 +38,22 @@ func eventually(t *testing.T, what string, ok func() bool) {
 
 // TestARunWithAServer pins the server's path: the discovery at Start, the run's
 // registration with its labels and the interval, its run configuration's policy in the
-// answer, dev.qory.run.registered as the record's first event, never posted, and the
-// run's stream delivered.
+// answer, dev.qory.run.registered as the record's first event, never posted, with the
+// instance id the registration carried, and the run's stream delivered.
 func TestARunWithAServer(t *testing.T) {
 	c := newControl(t)
 	c.serve(`{"version":1,"egress":{"mode":"enforce","allow":["api.example"]}}`, 'a')
+	// The instance id of every registration, as its X-Qory-Instance-Id came.
+	var instances []string
+	f := func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodPost && r.URL.Path == runsPath {
+			c.mu.Lock()
+			instances = append(instances, r.Header.Get(accesskey.HeaderInstanceID))
+			c.mu.Unlock()
+		}
+		return false
+	}
+	c.intercept.Store(&f)
 	var found gateway.Discovery
 	h := start(t, gateway.Config{Server: c.server(), Version: "1.2.3", Discovered: func(d gateway.Discovery) error { found = d; return nil }})
 	if found.NodeID != testNode {
@@ -92,6 +103,12 @@ func TestARunWithAServer(t *testing.T) {
 	if p := lines[0].Data; p["workspace"] != testWorkspace || p["node_id"] != testNode || p["instance_id"] != testInstance ||
 		p["forager_version"] != "1.2.3" || p["interval_seconds"] != 30.0 || p["contract_version"] != 1.0 || len(p) != 7 {
 		t.Errorf("run.registered %v", p)
+	}
+	c.mu.Lock()
+	got := slices.Clone(instances)
+	c.mu.Unlock()
+	if len(got) != 1 || got[0] == "" || got[0] != lines[0].Data["instance_id"] {
+		t.Errorf("the registrations came as instances %q, and run.registered records %v", got, lines[0].Data["instance_id"])
 	}
 	if got := types(c.lines(t)); !slices.Equal(got, want[1:]) {
 		t.Errorf("the server holds %v", got)

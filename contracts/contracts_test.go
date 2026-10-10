@@ -270,7 +270,7 @@ const beyondLinkSchema = "-beyond-schema-"
 // run.registered or a run.egress, a run.started a gateway opened, a run.exited with one of Forager's reasons
 // other than timeout or with timeout and a state other than cancelled, or a run.refused with a gateway's code, run_closed, another code of the
 // server's or a name of the form <member>=<value>, a link discovery that lists a node or
-// has no heartbeat interval or proxy, a link refusal without from, with a control
+// workspaces or has no heartbeat interval or proxy, a link refusal without from, with a control
 // character other than tab and newline in its message, C0, DEL or C1, or with a state
 // other than the three, and run credentials
 // with alg none or HS256, without an audience, with a label of claims and no join, a key
