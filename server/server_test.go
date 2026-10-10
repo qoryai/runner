@@ -270,7 +270,7 @@ func newVerified(t *testing.T) *verified {
 		case r.URL.Path == server.WellKnown:
 			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
 			w.Header().Set("Content-Type", "application/json")
-			reply(200, `{"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"`+v.srv.URL+`/v1/events","types":["*"]},"run":{"url":"`+v.srv.URL+`/v1/runs"},"apiary_public_key":[{"alg":"ed25519","public_key":"`+v.signer.PublicKey().String()+`"}],"later":{"x":1}}`)
+			reply(200, `{"version":1,"node_id":"nd_f1xt0re000000000","workspaces":["ws_f1xt0re000000000"],"events":{"url":"`+v.srv.URL+`/v1/events","types":["*"]},"run":{"url":"`+v.srv.URL+`/v1/runs"},"apiary_public_key":[{"alg":"ed25519","public_key":"`+v.signer.PublicKey().String()+`"}],"later":{"x":1}}`)
 		case r.URL.Path == "/v1/runs" && r.Method == http.MethodPost:
 			if r.Header.Get("Content-Type") != server.RegistrationContentType || r.Header.Get(server.HeaderDelivery) != "" || r.Header.Get(server.HeaderTimestamp) != "" {
 				t.Errorf("registration headers %v", r.Header)
@@ -340,7 +340,7 @@ func TestDiscoverReadsTheConfigurationAndItsDigest(t *testing.T) {
 	for name, run := range map[string]string{"without the run endpoint": "", "with a trailing slash": `,"run":{"url":"` + v.srv.URL + `/v1/runs/"}`,
 		"with a query": `,"run":{"url":"` + v.srv.URL + `/v1/runs?x=1"}`, "with a fragment": `,"run":{"url":"` + v.srv.URL + `/v1/runs#x"}`} {
 		v.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			doc := []byte(`{"version":1,"node_id":"nd_f1xt0re000000000","events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
+			doc := []byte(`{"version":1,"node_id":"nd_f1xt0re000000000","workspaces":["ws_f1xt0re000000000"],"events":{"url":"` + v.srv.URL + `/v1/events","types":["*"]}` + run + `,"apiary_public_key":[{"alg":"ed25519","public_key":"` + v.signer.PublicKey().String() + `"}]}`)
 			w.Header().Set(server.HeaderConfiguration, "sha256=c0")
 			w.Header().Set(server.HeaderSignature, v.signer.SignAnswer(accesskey.Answer{Status: 200, RequestSignature: r.Header.Get(server.HeaderSignature), Body: doc, Configuration: "sha256=c0"}))
 			w.Write(doc)

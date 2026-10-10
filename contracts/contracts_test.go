@@ -250,11 +250,12 @@ const beyondLinkSchema = "-beyond-schema-"
 
 // TestInvalidFixturesAreRefused pins that each document under fixtures/invalid fails the
 // schema its name starts with: a policy that widens, a server without its access key id
-// or its pin or with a secret, a configuration without events or without its run
-// endpoint or whose run endpoint has a query, a fragment or a trailing slash, a batch that holds a
+// or its pin or with a secret, a configuration without events, without its run
+// endpoint, without workspaces or with two, or whose run endpoint has a query, a fragment
+// or a trailing slash, a batch that holds a
 // run.registered, a run registration with a member it does not define, with an interval over
 // 300 seconds or with a time that is not UTC in whole seconds, a run.registered whose
-// interval is over 300 seconds, an event with an unpadded sequence, a run.started without opened_by,
+// interval is over 300 seconds or without its workspace, an event with an unpadded sequence, a run.started without opened_by,
 // with an unknown one, opened by a session without its command or by a gateway with one,
 // a run.exited without state, with a state other than the three, with a reason that is
 // not a code, with gateway_lost and a state other than failed, with quiet and no

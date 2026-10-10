@@ -31,9 +31,10 @@ import (
 )
 
 const (
-	testKey      = "ak_f1xt0re000000000"
-	testInstance = "i_test"
-	testNode     = "nd_f1xt0re000000000"
+	testKey       = "ak_f1xt0re000000000"
+	testInstance  = "i_test"
+	testNode      = "nd_f1xt0re000000000"
+	testWorkspace = "ws_f1xt0re000000000"
 )
 
 // The keys of the tests: the access key the gateway signs with, and the control's own
@@ -118,7 +119,7 @@ func newControl(t *testing.T) *control {
 		Admit:  func(string, string) bool { return !c.limit.Load() },
 		Configuration: func() ([]byte, string) {
 			pin, _ := json.Marshal(testPin)
-			doc := `{"version":1,"node_id":"` + testNode + `","apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
+			doc := `{"version":1,"node_id":"` + testNode + `","workspaces":["` + testWorkspace + `"],"apiary_public_key":` + string(pin) + `,"events":{"url":"` + c.srv.URL + `/v1/events","types":["*"]}`
 			doc += `,"run":{"url":"` + c.srv.URL + runsPath + `"}}`
 			return []byte(doc), "sha256=" + fmt.Sprint(len(doc))
 		},

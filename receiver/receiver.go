@@ -157,9 +157,9 @@ type Handler struct {
 	// either way; zero means the contract's 300 seconds.
 	Window time.Duration
 	// Configuration answers discovery with the configuration document and the
-	// receiver's digest of it. The document lists version, node_id, events, run, whose
-	// url is the run endpoint, and apiary_public_key, the receiver's public key. Nil
-	// means discovery is not served.
+	// receiver's digest of it. The document lists version, node_id, workspaces, events,
+	// run, whose url is the run endpoint, and apiary_public_key, the receiver's public
+	// key. Nil means discovery is not served.
 	Configuration func() (document []byte, digest string)
 	// RunConfiguration decides the run configuration of a run: as it registers, as it
 	// is reloaded by its id, and for the digest every answer to a delivery of the run

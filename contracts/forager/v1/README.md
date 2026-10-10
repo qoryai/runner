@@ -743,7 +743,7 @@ The types, one namespace. Forager's own:
 
 | Type | When | Data |
 |---|---|---|
-| `dev.qory.run.registered` | the server accepted the run's registration: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the registration; absent when the run has no server | `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's |
+| `dev.qory.run.registered` | the server accepted the run's registration: the gateway writes it as the first event of its record, sequence 1, before the runtime starts; in the record alone, never posted to the server, which has its values from the access key and the registration; absent when the run has no server | `workspace`, the one id discovery's `workspaces` lists, and `node_id`, discovery's; `instance_id`, the instance id the registration was signed with, as its `X-Qory-Instance-Id` contained it; `forager_version`, `events`, `contract_version`, `interval_seconds`, the registration's |
 | `dev.qory.run.started` | the run is open: the runtime is about to start, or a gateway opened the run; `dev.qory.run.started` or `dev.qory.run.refused` is the first event after `dev.qory.run.registered`, heartbeats aside | `opened_by`, `credential`, `forager_version`; opened by a session `runtime`, `runtime_version`, `command`, `args`, `dir`, `interactive`, `host`, on a pseudo-terminal `terminal`, behind a wall `wall`, `image`, and when the machine's definition sets them `image_name`, `container_runtime` and `docker`; and `labels` when the caller passes any, and `about` when the caller passes one |
 | `dev.qory.run.policy_applied` | right after, once; again at the sequence where a new run configuration takes effect | `mode`, `allow`, `deny`, `source`, `variables`, and with them set `url`, `digest`, `run_configuration`, `node_policy`, `harness_hosts`, `paths`, `credentials`, `tools`, `image`, `terminated` |
 | `dev.qory.run.log` | one per chunk of output: on pipes one line or 4096 bytes, on a pseudo-terminal 4096 bytes or a quiet gap of 50 ms, whichever comes first | `stream`, `bytes` |
@@ -1011,7 +1011,9 @@ refused.
 **Nodes and instances.** An access key belongs to a node, `nd_`, a permanent machine
 that runs one instance at a time, or to a node pool, `np_`, whose instances share the
 access key, up to a limit the pool may set; each id is followed by 16 lower-case
-Crockford base32 characters. An instance is one running copy of `qory` with the access
+Crockford base32 characters. A node or node pool belongs to one workspace, `ws_`
+followed by 16 lower-case Crockford base32 characters, `^ws_[0-9a-hjkmnp-tv-z]{16}$`:
+Qory Apiary's public id of the workspace, which is not the directory a run works in. An instance is one running copy of `qory` with the access
 key. Its instance id, `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, is a signed line of every
 request, for display, audit, per-instance events and the instance limit; authorisation
 rests on the access key alone, and whoever holds the access key can claim any instance
@@ -1133,10 +1135,10 @@ signature under the pin as no run, `answer_unsigned`; during the run a delivery'
 without one is no answer, retried as any other with its headers unread, and a reload's
 fetch without one fails the reload. Forager reads a body's code only from a signed
 answer, and a refusal body over 64 KiB counts as unsigned. Three known answers under the
-fixture signing key: to the GET of discovery above, `200` with the 253-byte body of
+fixture signing key: to the GET of discovery above, `200` with the 290-byte body of
 `fixtures/known-answers/discovery.json` and `X-Qory-Configuration: sha256=` and the hex
 SHA-256 of that body, six lines of 251 bytes,
-`pABYqjJR87W7mF8ofjwV_BAbkpLZXukQBW9HsuHinJ1aA8YXGrGacr0jnpB3PTKt16DUgwOSGC9oO487AF8lAA`,
+`bnG9MvDyG-EDbwP8bLCok0827-GbNkqD-8DPzVX4gCPOSndLhgknc7S6BIdZhGYlafju5Bmfo4R37UGQnHOECQ`,
 and `404` with an empty body and no digest, 180 bytes,
 `wtXEpqIYCRAH0I9P0wd1DxJxkury0OE566ADTu3bH2GWUP4-TAkNl3a5oKGP6ZVWsP8oPL-yJHuaOaxbNPU_Dg`;
 and to the registration above, `200` with the 97-byte body of
@@ -1231,14 +1233,18 @@ Forager, which compares it byte for byte and never recomputes it.
 ```json
 {"version": 1,
  "node_id": "nd_f1xt0re000000000",
+ "workspaces": ["ws_f1xt0re000000000"],
  "events": {"url": "https://qory.example/v1/events", "types": ["*"]},
  "run": {"url": "https://qory.example/v1/runs"},
  "apiary_public_key": [{"alg": "ed25519", "public_key": "rcFAEfgtHFbZVqpPnXPYhYNhpgYEhSXg0Ixjjcdd2Mc"}]}
 ```
 
-`version`, `node_id`, `events`, `run` and `apiary_public_key` are required. `node_id` is the id
+`version`, `node_id`, `workspaces`, `events`, `run` and `apiary_public_key` are required. `node_id` is the id
 of the access key's node or node pool, `^n[dp]_[0-9a-hjkmnp-tv-z]{16}$`, listed for
-display: `qory` prints it. `apiary_public_key` lists the server's current key, and
+display: `qory` prints it. `workspaces` lists the workspaces the access key may name, by
+their ids, `^ws_[0-9a-hjkmnp-tv-z]{16}$`; for a node's or node pool's access
+key it holds exactly one, the workspace its node or node pool belongs to. The gateway
+records it, and `node_id`, in a run's `dev.qory.run.registered`. `apiary_public_key` lists the server's current key, and
 during a rotation the next one, for information: Forager verifies under its pin alone.
 `secrets` is optional, `{url}` with `events.url`'s grammar: present for an access key
 allowed stored secrets, and a server that lists it requires a wall for every run. Discovery lists no key endpoint: keys change through
@@ -1445,7 +1451,7 @@ id, and the events endpoint, accepts the public keys listed in its own configura
 and skips enrolment, verifies each request and answers in the order this section
 defines, signs every answer after verification under its own key, returns the digest
 headers, deduplicates and appends to a file. Its discovery lists `version`, `node_id`,
-`events`, `run` and `apiary_public_key`, and no `secrets`. A hook of the server that
+`workspaces`, `events`, `run` and `apiary_public_key`, and no `secrets`. A hook of the server that
 embeds it is handed the run id, the labels and `about`, and returns the run's run
 configuration, or refuses the run with a status and a code or with no code; `about` is
 for display and never selects a policy. Without a hook it answers every registration

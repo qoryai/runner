@@ -36,12 +36,12 @@
   ],
   "answers": [
     {
-      "note": "200 to the GET of discovery above, signed under the fixture signing key: the discovery body of an access key without stored secrets, with its run endpoint, in a workspace with nothing in force, with X-Qory-Configuration and no run-configuration digest.",
+      "note": "200 to the GET of discovery above, signed under the fixture signing key: the discovery body of an access key without stored secrets, with its run endpoint, of the one workspace it lists, with nothing in force, with X-Qory-Configuration and no run-configuration digest.",
       "body": "fixtures/known-answers/discovery.json",
-      "body_length": 253,
-      "lines": ["qory-answer-ed25519-v1", "200", "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ", "bc342f8a7bf8ac3ff15c3f0dd9cd9c4bbe6aee6be7f83951eb5484e0c934e287", "sha256=bc342f8a7bf8ac3ff15c3f0dd9cd9c4bbe6aee6be7f83951eb5484e0c934e287", ""],
+      "body_length": 290,
+      "lines": ["qory-answer-ed25519-v1", "200", "H9XeK0R-KWGvQNITRP01Fh9_62ATGKd7rTgehaIPjcYYM374LrKzswcmQRYO0m-2UHx6NJJxWT3rk0HL4sD_CQ", "21f6add77ac99f1c6b2dc809248d12afdb16cf852547b0fe8873191bac2d0517", "sha256=21f6add77ac99f1c6b2dc809248d12afdb16cf852547b0fe8873191bac2d0517", ""],
       "length": 251,
-      "signature": "pABYqjJR87W7mF8ofjwV_BAbkpLZXukQBW9HsuHinJ1aA8YXGrGacr0jnpB3PTKt16DUgwOSGC9oO487AF8lAA"
+      "signature": "bnG9MvDyG-EDbwP8bLCok0827-GbNkqD-8DPzVX4gCPOSndLhgknc7S6BIdZhGYlafju5Bmfo4R37UGQnHOECQ"
     },
     {
       "note": "404 to the GET of discovery above, with an empty body and no digest, signed under the fixture signing key.",

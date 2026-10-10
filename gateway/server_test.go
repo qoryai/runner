@@ -89,7 +89,8 @@ func TestARunWithAServer(t *testing.T) {
 	if !slices.Equal(types(lines), want) {
 		t.Fatalf("record %v", types(lines))
 	}
-	if p := lines[0].Data; p["forager_version"] != "1.2.3" || p["interval_seconds"] != 30.0 || p["contract_version"] != 1.0 || len(p) != 4 {
+	if p := lines[0].Data; p["workspace"] != testWorkspace || p["node_id"] != testNode || p["instance_id"] != testInstance ||
+		p["forager_version"] != "1.2.3" || p["interval_seconds"] != 30.0 || p["contract_version"] != 1.0 || len(p) != 7 {
 		t.Errorf("run.registered %v", p)
 	}
 	if got := types(c.lines(t)); !slices.Equal(got, want[1:]) {
